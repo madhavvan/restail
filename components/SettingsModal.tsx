@@ -41,10 +41,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
         {/* Body */}
         <div className="p-4 space-y-5">
           
-          {/* Active Provider - Only 2 models */}
+          {/* Active Provider */}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Choose Primary Model</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2">
               <button
                 onClick={() => handleChange('activeProvider', 'openai')}
                 className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg border text-sm font-semibold transition-all
@@ -53,7 +53,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                     : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                   }`}
               >
-                GPT-5.2 (OpenAI)
+                GPT-4o (OpenAI)
               </button>
               <button
                 onClick={() => handleChange('activeProvider', 'deepseek')}
@@ -64,6 +64,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                   }`}
               >
                 DeepSeek-V3.2
+              </button>
+              <button
+                onClick={() => handleChange('activeProvider', 'gemini')}
+                className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg border text-sm font-semibold transition-all
+                  ${formData.activeProvider === 'gemini' 
+                    ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' 
+                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+              >
+                Gemini 3.1 Pro
               </button>
             </div>
           </div>
@@ -110,9 +120,29 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
             </div>
           </div>
 
+          {/* Gemini Key */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1 flex items-center gap-2">
+              Gemini API Key
+              {formData.activeProvider === 'gemini' && <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold">ACTIVE</span>}
+            </label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <Key className="w-4 h-4 text-slate-400" />
+              </div>
+              <input
+                type="password"
+                value={formData.geminiApiKey}
+                onChange={(e) => handleChange('geminiApiKey', e.target.value)}
+                placeholder="AIza..."
+                className="pl-10 block w-full rounded-lg border border-slate-300 bg-slate-50 py-2 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+          </div>
+
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs">
             <p className="text-amber-800">
-              <strong>Note:</strong> Keys saved locally only. Conversation happens between GPT-5.2 (OpenAI) and DeepSeek-V3.2.
+              <strong>Note:</strong> Keys saved locally only.
             </p>
           </div>
 

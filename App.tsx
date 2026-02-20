@@ -5,11 +5,13 @@ import ResumePreview from './components/ResumePreview';
 import SettingsModal from './components/SettingsModal';
 import { tailorResumeOpenAI, createOptimizationPlan } from './services/openaiService';
 import { tailorResumeDeepSeek, createOptimizationPlanDeepSeek } from './services/deepseekService';
-import { FileText, Briefcase, Wand2, ArrowRight, Settings, Undo, LayoutDashboard, Terminal, BrainCircuit, Sparkles, Info, Loader2 } from 'lucide-react';
+import { tailorResumeGemini, createOptimizationPlanGemini } from './services/geminiService';
+import { FileText, Briefcase, Wand2, ArrowRight, Settings, Undo, LayoutDashboard, Terminal, BrainCircuit, Sparkles, Info, Loader2, AlertOctagon, RefreshCw, Zap } from 'lucide-react';
 
 const DEFAULT_SETTINGS: AppSettings = {
   openaiApiKey: '',
   deepseekApiKey: '',
+  geminiApiKey: '',
   activeProvider: 'openai'
 };
 
@@ -22,18 +24,22 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const [agentActivity, setAgentActivity] = useState<{agent: 'GPT-5.2' | 'DeepSeek-V3.2' | null, message: string}>({agent: null, message: ''});
-  const [agentLogs, setAgentLogs] = useState<Array<{id: string, agent: 'GPT-5.2' | 'DeepSeek-V3.2' | 'SYSTEM', message: string, timestamp: Date}>>([]);
+  const [agentActivity, setAgentActivity] = useState<{agent: string | null, message: string}>({agent: null, message: ''});
+  const [agentLogs, setAgentLogs] = useState<Array<{id: string, agent: string, message: string, timestamp: Date}>>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const settingsRef = useRef<AppSettings>(DEFAULT_SETTINGS);
+  const [retryPrompt, setRetryPrompt] = useState<{ message: string, resolve: () => void, reject: (err: Error) => void } | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('resuTailorSettings');
     if (saved) {
       try {
-        setSettings(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        setSettings(parsed);
+        settingsRef.current = parsed;
       } catch (e) {
         console.error("Failed to load settings");
       }
@@ -44,7 +50,7 @@ const App: React.FC = () => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [agentLogs]);
 
-  const addLog = (agent: 'GPT-5.2' | 'DeepSeek-V3.2' | 'SYSTEM', message: string) => {
+  const addLog = (agent: string, message: string) => {
     setAgentLogs(prev => [...prev, {
       id: Math.random().toString(36).substring(7),
       agent,
@@ -53,12 +59,13 @@ const App: React.FC = () => {
     }]);
     
     if (agent !== 'SYSTEM') {
-      setAgentActivity({ agent, message: agent === 'GPT-5.2' ? 'Working on resume...' : 'Reviewing resume...' });
+      setAgentActivity({ agent, message: 'Working on resume...' });
     }
   };
 
   const handleSaveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
+    settingsRef.current = newSettings;
     localStorage.setItem('resuTailorSettings', JSON.stringify(newSettings));
   };
 
@@ -78,6 +85,42 @@ const App: React.FC = () => {
     });
     return draft;
   };
+
+  async function executeWithRetry<T>(operation: () => Promise<T>, agentName: string): Promise<T> {
+    let attempts = 0;
+    while (true) {
+      try {
+        return await operation();
+      } catch (err: any) {
+        attempts++;
+        const isRateLimit = err?.status === 429 || err?.message?.toLowerCase().includes('quota') || err?.message?.toLowerCase().includes('rate limit') || err?.message?.toLowerCase().includes('too many requests');
+        
+        if (isRateLimit && attempts <= 2) {
+           addLog('SYSTEM', `⚠️ Rate limit hit for ${agentName}. Auto-retrying in ${attempts * 3}s...`);
+           await new Promise(r => setTimeout(r, attempts * 3000));
+           continue;
+        }
+
+        addLog('SYSTEM', `❌ Error (${agentName}): ${err.message || 'Unknown error'}. Paused for retry.`);
+        
+        try {
+          await new Promise<void>((resolve, reject) => {
+             setRetryPrompt({
+                message: `The ${agentName} model encountered an error (possibly out of tokens/quota). You can update your API key in Settings and retry, or cancel.`,
+                resolve,
+                reject
+             });
+          });
+          setRetryPrompt(null);
+          addLog('SYSTEM', `🔄 Retrying operation for ${agentName}...`);
+          attempts = 0; 
+        } catch (cancelErr) {
+          setRetryPrompt(null);
+          throw cancelErr; 
+        }
+      }
+    }
+  }
 
   const handleTailorClick = async () => {
     if (!resumeText || !jobDescription.trim()) {
@@ -99,87 +142,89 @@ const App: React.FC = () => {
 
       addLog('SYSTEM', 'Initializing Dual-Agent Orchestrator v2.2...');
       await new Promise(r => setTimeout(r, 600));
-      addLog('SYSTEM', 'Resume and JD shared between GPT-5.2 and DeepSeek-V3.2.');
 
-      const isOpenAIPrimary = settings.activeProvider === 'openai';
-
-      // ====================== PRIMARY OPTIMIZER BLOCK ======================
-      if (isOpenAIPrimary) {
-        // GPT-5.2 (OpenAI) is Primary Optimizer, DeepSeek is Reviewer
-        setAgentActivity({ agent: 'GPT-5.2', message: 'Analyzing...' });
-        addLog('GPT-5.2', `I have read the full resume and Job Description.\nPreparing optimization plan for maximum ATS score.`);
-
-        const plan = await createOptimizationPlan(resumeText, jobDescription, settings.openaiApiKey);
-        addLog('GPT-5.2', `PROPOSED OPTIMIZATION PLAN:\n\n${plan}\n\nDeepSeek-V3.2, I am going to apply these changes. Please review and give your critical feedback.`);
-
-        setAgentActivity({ agent: 'DeepSeek-V3.2', message: 'Reviewing...' });
-        const reviewerFeedback = await createOptimizationPlanDeepSeek(resumeText, jobDescription, settings.deepseekApiKey);
-        addLog('DeepSeek-V3.2', `REVIEW FEEDBACK:\n\n${reviewerFeedback}`);
-
-        setAgentActivity({ agent: 'GPT-5.2', message: 'Implementing...' });
-        addLog('GPT-5.2', 'Acknowledged. Integrating DeepSeek feedback and creating Version 1.0...');
-
-        data = await tailorResumeOpenAI(resumeText, jobDescription, settings.openaiApiKey, {
-          previousModifications: [],
-          auditorFeedback: reviewerFeedback,
-          currentScore: 0
-        });
-
-      } else {
-        // DeepSeek is Primary Optimizer, GPT-5.2 is Reviewer
-        setAgentActivity({ agent: 'DeepSeek-V3.2', message: 'Analyzing...' });
-        addLog('DeepSeek-V3.2', `I have read the full resume and Job Description.\nPreparing optimization plan for maximum ATS score.`);
-
-        const plan = await createOptimizationPlanDeepSeek(resumeText, jobDescription, settings.deepseekApiKey);
-        addLog('DeepSeek-V3.2', `PROPOSED OPTIMIZATION PLAN:\n\n${plan}\n\nGPT-5.2, I am going to apply these changes. Please review and give your critical feedback.`);
-
-        setAgentActivity({ agent: 'GPT-5.2', message: 'Reviewing...' });
-        const reviewerFeedback = await createOptimizationPlan(resumeText, jobDescription, settings.openaiApiKey);
-        addLog('GPT-5.2', `REVIEW FEEDBACK:\n\n${reviewerFeedback}`);
-
-        setAgentActivity({ agent: 'DeepSeek-V3.2', message: 'Implementing...' });
-        addLog('DeepSeek-V3.2', 'Acknowledged. Integrating GPT-5.2 feedback and creating Version 1.0...');
-
-        data = await tailorResumeDeepSeek(resumeText, jobDescription, settings.deepseekApiKey, {
-          previousModifications: [],
-          auditorFeedback: reviewerFeedback,
-          currentScore: 0
-        });
+      const provider = settingsRef.current.activeProvider;
+      let primaryAgentName = 'GPT-4o';
+      let reviewerAgentName = 'DeepSeek-V3.2';
+      
+      if (provider === 'deepseek') {
+        primaryAgentName = 'DeepSeek-V3.2';
+        reviewerAgentName = 'GPT-4o';
+      } else if (provider === 'gemini') {
+        primaryAgentName = 'Gemini 3.1 Pro';
+        reviewerAgentName = 'DeepSeek-V3.2';
       }
 
+      addLog('SYSTEM', `Resume and JD shared between ${primaryAgentName} and ${reviewerAgentName}.`);
+
+      const runPrimaryPlan = async () => {
+        if (provider === 'openai') return createOptimizationPlan(resumeText, jobDescription, settingsRef.current.openaiApiKey);
+        if (provider === 'deepseek') return createOptimizationPlanDeepSeek(resumeText, jobDescription, settingsRef.current.deepseekApiKey);
+        return createOptimizationPlanGemini(resumeText, jobDescription, settingsRef.current.geminiApiKey);
+      };
+
+      const runReviewerPlan = async () => {
+        if (provider === 'openai' || provider === 'gemini') return createOptimizationPlanDeepSeek(resumeText, jobDescription, settingsRef.current.deepseekApiKey);
+        return createOptimizationPlan(resumeText, jobDescription, settingsRef.current.openaiApiKey);
+      };
+
+      const runPrimaryTailor = async (critiqueContext?: any) => {
+        if (provider === 'openai') return tailorResumeOpenAI(resumeText, jobDescription, settingsRef.current.openaiApiKey, critiqueContext);
+        if (provider === 'deepseek') return tailorResumeDeepSeek(resumeText, jobDescription, settingsRef.current.deepseekApiKey, critiqueContext);
+        return tailorResumeGemini(resumeText, jobDescription, settingsRef.current.geminiApiKey, critiqueContext);
+      };
+
+      const runReviewerTailor = async (critiqueContext?: any) => {
+        if (provider === 'openai' || provider === 'gemini') return tailorResumeDeepSeek(resumeText, jobDescription, settingsRef.current.deepseekApiKey, critiqueContext);
+        return tailorResumeOpenAI(resumeText, jobDescription, settingsRef.current.openaiApiKey, critiqueContext);
+      };
+
+      // ====================== PRIMARY OPTIMIZER BLOCK ======================
+      setAgentActivity({ agent: primaryAgentName, message: 'Analyzing...' });
+      addLog(primaryAgentName, `I have read the full resume and Job Description.\nPreparing optimization plan for maximum ATS score.`);
+
+      const plan = await executeWithRetry(runPrimaryPlan, primaryAgentName);
+      addLog(primaryAgentName, `PROPOSED OPTIMIZATION PLAN:\n\n${plan}\n\n${reviewerAgentName}, I am going to apply these changes. Please review and give your critical feedback.`);
+
+      setAgentActivity({ agent: reviewerAgentName, message: 'Reviewing...' });
+      const reviewerFeedback = await executeWithRetry(runReviewerPlan, reviewerAgentName);
+      addLog(reviewerAgentName, `REVIEW FEEDBACK:\n\n${reviewerFeedback}`);
+
+      setAgentActivity({ agent: primaryAgentName, message: 'Implementing...' });
+      addLog(primaryAgentName, `Acknowledged. Integrating ${reviewerAgentName} feedback and creating Version 1.0...`);
+
+      data = await executeWithRetry(() => runPrimaryTailor({
+        previousModifications: [],
+        auditorFeedback: reviewerFeedback,
+        currentScore: 0
+      }), primaryAgentName);
+
       currentDraftText = constructDraftResume(resumeText, data.modifications);
-      addLog(isOpenAIPrimary ? 'GPT-5.2' : 'DeepSeek-V3.2', `Version 1.0 created and sent for review.`);
+      addLog(primaryAgentName, `Version 1.0 created and sent for review.`);
 
       // ====================== ITERATION LOOP ======================
       while (iterations < MAX_ITERATIONS) {
         iterations++;
         version += 0.1;
 
-        const reviewerAgent = isOpenAIPrimary ? 'DeepSeek-V3.2' : 'GPT-5.2';
-        const optimizerAgent = isOpenAIPrimary ? 'GPT-5.2' : 'DeepSeek-V3.2';
+        setAgentActivity({ agent: reviewerAgentName, message: 'Auditing Draft...' });
+        const atsResult = await executeWithRetry(() => runReviewerTailor({ previousModifications: data.modifications, auditorFeedback: "", currentScore: 0 }), reviewerAgentName);
 
-        setAgentActivity({ agent: reviewerAgent as any, message: 'Auditing Draft...' });
-        const atsResult = isOpenAIPrimary 
-          ? await tailorResumeDeepSeek(resumeText, jobDescription, settings.deepseekApiKey, { previousModifications: data.modifications, auditorFeedback: "", currentScore: 0 })
-          : await tailorResumeOpenAI(resumeText, jobDescription, settings.openaiApiKey, { previousModifications: data.modifications, auditorFeedback: "", currentScore: 0 });
-
-        addLog(reviewerAgent, `AUDIT REPORT (v${version.toFixed(1)}):\nScore: ${atsResult.ats?.score || 85}%\n\nFeedback: ${atsResult.ats?.feedback || "No major issues."}`);
+        addLog(reviewerAgentName, `AUDIT REPORT (v${version.toFixed(1)}):\nScore: ${atsResult.ats?.score || 85}%\n\nFeedback: ${atsResult.ats?.feedback || "No major issues."}`);
 
         if ((atsResult.ats?.score || 85) >= 98) {
-          addLog(reviewerAgent, 'No major changes needed. Resume is optimized.');
+          addLog(reviewerAgentName, 'No major changes needed. Resume is optimized.');
           break;
         }
 
-        setAgentActivity({ agent: optimizerAgent as any, message: 'Refining...' });
-        addLog(optimizerAgent, `Understood. Refining based on feedback → Version ${version.toFixed(1)}...`);
+        setAgentActivity({ agent: primaryAgentName, message: 'Refining...' });
+        addLog(primaryAgentName, `Understood. Refining based on feedback → Version ${version.toFixed(1)}...`);
 
-        const refinedData = isOpenAIPrimary 
-          ? await tailorResumeOpenAI(resumeText, jobDescription, settings.openaiApiKey, { previousModifications: data.modifications, auditorFeedback: atsResult.ats?.feedback || "", currentScore: atsResult.ats?.score || 0 })
-          : await tailorResumeDeepSeek(resumeText, jobDescription, settings.deepseekApiKey, { previousModifications: data.modifications, auditorFeedback: atsResult.ats?.feedback || "", currentScore: atsResult.ats?.score || 0 });
+        const refinedData = await executeWithRetry(() => runPrimaryTailor({ previousModifications: data.modifications, auditorFeedback: atsResult.ats?.feedback || "", currentScore: atsResult.ats?.score || 0 }), primaryAgentName);
 
         data = refinedData;
         currentDraftText = constructDraftResume(resumeText, data.modifications);
-        addLog(optimizerAgent, `Version ${version.toFixed(1)} created and sent for next review.`);
+        addLog(primaryAgentName, `Version ${version.toFixed(1)} created and sent for next review.`);
       }
 
       addLog('SYSTEM', 'Optimization complete. Final resume ready for download.');
@@ -208,6 +253,30 @@ const App: React.FC = () => {
     setAgentLogs([]);
   };
 
+  const getAgentIcon = (agentName: string) => {
+    if (agentName.includes('GPT')) return <BrainCircuit className="w-5 h-5" />;
+    if (agentName.includes('DeepSeek')) return <Sparkles className="w-5 h-5" />;
+    return <Zap className="w-5 h-5" />;
+  };
+
+  const getAgentColorClass = (agentName: string) => {
+    if (agentName.includes('GPT')) return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+    if (agentName.includes('DeepSeek')) return 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+    return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+  };
+
+  const getAgentTextClass = (agentName: string) => {
+    if (agentName.includes('GPT')) return 'text-blue-400';
+    if (agentName.includes('DeepSeek')) return 'text-purple-400';
+    return 'text-emerald-400';
+  };
+
+  const getAgentBubbleClass = (agentName: string, isRight: boolean) => {
+    if (agentName.includes('GPT')) return 'bg-slate-800 border border-slate-700 text-slate-200 rounded-tl-none';
+    if (agentName.includes('DeepSeek')) return 'bg-indigo-600 border border-indigo-500 text-white shadow-indigo-900/50 rounded-tr-none';
+    return 'bg-emerald-600 border border-emerald-500 text-white shadow-emerald-900/50 rounded-tr-none';
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       <SettingsModal 
@@ -231,7 +300,9 @@ const App: React.FC = () => {
             <div className="hidden sm:flex flex-col items-end mr-2">
               <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">ACTIVE MODE</span>
               <span className="text-xs font-semibold text-slate-700">
-                {settings.activeProvider === 'openai' ? 'GPT-5.2 (OpenAI) + DeepSeek-V3.2' : 'DeepSeek-V3.2 + GPT-5.2'}
+                {settings.activeProvider === 'openai' ? 'GPT-4o + DeepSeek-V3.2' : 
+                 settings.activeProvider === 'deepseek' ? 'DeepSeek-V3.2 + GPT-4o' : 
+                 'Gemini 3.1 Pro + DeepSeek-V3.2'}
               </span>
             </div>
             <button onClick={() => setIsSettingsOpen(true)} className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition-all">
@@ -248,7 +319,7 @@ const App: React.FC = () => {
             <div className="text-center mb-10">
               <h2 className="text-3xl font-bold text-slate-900 mb-3">Tailor your resume for any job in seconds</h2>
               <p className="text-lg text-slate-600">
-                GPT-5.2 and DeepSeek-V3.2 will collaborate to optimize it.
+                AI specialists will collaborate to optimize it.
               </p>
             </div>
 
@@ -307,31 +378,19 @@ const App: React.FC = () => {
               <p className="text-slate-500 mt-2">Watch our AI specialists collaborate to perfect your resume.</p>
             </div>
             
-            <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden flex flex-col h-[70vh]">
+            <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden flex flex-col h-[70vh] relative">
+              
               {/* Header with Agent Status */}
               <div className="bg-slate-50 border-b border-slate-200 p-4 flex justify-between items-center">
                 <div className="flex gap-6">
-                  {/* Agent 1 Status */}
-                  <div className={`flex items-center gap-3 transition-opacity duration-300 ${agentActivity.agent === 'GPT-5.2' ? 'opacity-100' : 'opacity-50'}`}>
-                    <div className={`p-2 rounded-lg ${agentActivity.agent === 'GPT-5.2' ? 'bg-blue-100 text-blue-600 animate-pulse' : 'bg-slate-200 text-slate-500'}`}>
+                  {/* Agent Status */}
+                  <div className={`flex items-center gap-3 transition-opacity duration-300 opacity-100`}>
+                    <div className={`p-2 rounded-lg bg-slate-200 text-slate-500`}>
                       <BrainCircuit className="w-5 h-5" />
                     </div>
                     <div>
-                      <div className="text-sm font-bold text-slate-900">GPT-5.2</div>
-                      <div className="text-xs text-slate-500">{agentActivity.agent === 'GPT-5.2' ? agentActivity.message : 'Waiting...'}</div>
-                    </div>
-                  </div>
-                  
-                  <div className="w-px bg-slate-200 h-10"></div>
-                  
-                  {/* Agent 2 Status */}
-                  <div className={`flex items-center gap-3 transition-opacity duration-300 ${agentActivity.agent === 'DeepSeek-V3.2' ? 'opacity-100' : 'opacity-50'}`}>
-                    <div className={`p-2 rounded-lg ${agentActivity.agent === 'DeepSeek-V3.2' ? 'bg-purple-100 text-purple-600 animate-pulse' : 'bg-slate-200 text-slate-500'}`}>
-                      <Sparkles className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold text-slate-900">DeepSeek-V3.2</div>
-                      <div className="text-xs text-slate-500">{agentActivity.agent === 'DeepSeek-V3.2' ? agentActivity.message : 'Waiting...'}</div>
+                      <div className="text-sm font-bold text-slate-900">Agents Active</div>
+                      <div className="text-xs text-slate-500">{agentActivity.message || 'Waiting...'}</div>
                     </div>
                   </div>
                 </div>
@@ -351,39 +410,67 @@ const App: React.FC = () => {
                   </div>
                 )}
                 
-                {agentLogs.map((log) => (
-                  <div key={log.id} className={`flex ${log.agent === 'SYSTEM' ? 'justify-center' : log.agent === 'GPT-5.2' ? 'justify-start' : 'justify-end'} animate-in fade-in slide-in-from-bottom-4 duration-500`}>
-                    
-                    {log.agent === 'SYSTEM' ? (
-                      <div className="bg-slate-800 border border-slate-700 shadow-sm text-slate-300 px-4 py-2 rounded-full text-xs font-mono flex items-center gap-2 my-2">
-                        <Info className="w-4 h-4 text-indigo-400" />
-                        {log.message}
-                      </div>
-                    ) : (
-                      <div className={`flex gap-4 max-w-[85%] ${log.agent === 'DeepSeek-V3.2' ? 'flex-row-reverse' : ''}`}>
-                        <div className="shrink-0 mt-1">
-                          <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-lg border-2 border-slate-800 ${log.agent === 'GPT-5.2' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'}`}>
-                            {log.agent === 'GPT-5.2' ? <BrainCircuit className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
+                {agentLogs.map((log) => {
+                  const isRight = log.agent.includes('DeepSeek');
+                  return (
+                    <div key={log.id} className={`flex ${log.agent === 'SYSTEM' ? 'justify-center' : !isRight ? 'justify-start' : 'justify-end'} animate-in fade-in slide-in-from-bottom-4 duration-500`}>
+                      
+                      {log.agent === 'SYSTEM' ? (
+                        <div className="bg-slate-800 border border-slate-700 shadow-sm text-slate-300 px-4 py-2 rounded-full text-xs font-mono flex items-center gap-2 my-2">
+                          <Info className="w-4 h-4 text-indigo-400" />
+                          {log.message}
+                        </div>
+                      ) : (
+                        <div className={`flex gap-4 max-w-[85%] ${isRight ? 'flex-row-reverse' : ''}`}>
+                          <div className="shrink-0 mt-1">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-lg border-2 ${getAgentColorClass(log.agent)}`}>
+                              {getAgentIcon(log.agent)}
+                            </div>
+                          </div>
+                          
+                          <div className={`flex flex-col ${isRight ? 'items-end' : 'items-start'}`}>
+                            <div className="flex items-center gap-2 mb-1.5 px-1">
+                              <span className={`text-xs font-bold ${getAgentTextClass(log.agent)}`}>{log.agent}</span>
+                              <span className="text-[10px] font-mono text-slate-500">{log.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                            </div>
+                            <div className={`p-4 shadow-sm text-sm leading-relaxed whitespace-pre-wrap font-medium rounded-2xl ${getAgentBubbleClass(log.agent, isRight)}`}>
+                              {log.message}
+                            </div>
                           </div>
                         </div>
-                        
-                        <div className={`flex flex-col ${log.agent === 'DeepSeek-V3.2' ? 'items-end' : 'items-start'}`}>
-                          <div className="flex items-center gap-2 mb-1.5 px-1">
-                            <span className={`text-xs font-bold ${log.agent === 'GPT-5.2' ? 'text-blue-400' : 'text-purple-400'}`}>{log.agent}</span>
-                            <span className="text-[10px] font-mono text-slate-500">{log.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                          </div>
-                          <div className={`p-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap font-medium ${
-                            log.agent === 'GPT-5.2' 
-                              ? 'bg-slate-800 border border-slate-700 text-slate-200 rounded-tl-none' 
-                              : 'bg-indigo-600 border border-indigo-500 text-white shadow-indigo-900/50 rounded-tr-none'
-                          }`}>
-                            {log.message}
-                          </div>
-                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Inline Retry Prompt */}
+                {retryPrompt && (
+                  <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in slide-in-from-bottom-2 mt-4">
+                    <div className="flex items-center gap-3 text-red-400">
+                      <AlertOctagon className="w-6 h-6 shrink-0" />
+                      <div className="text-sm">
+                        <p className="font-bold text-red-300">Process Paused</p>
+                        <p>{retryPrompt.message}</p>
                       </div>
-                    )}
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <button 
+                        onClick={() => retryPrompt.reject(new Error("User cancelled the operation."))}
+                        className="px-4 py-2 bg-slate-800 border border-slate-700 text-slate-300 rounded-lg text-sm font-semibold hover:bg-slate-700 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={() => retryPrompt.resolve()}
+                        className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-semibold hover:bg-red-600 transition-colors flex items-center gap-2"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        Retry Now
+                      </button>
+                    </div>
                   </div>
-                ))}
+                )}
+
                 <div ref={logsEndRef} className="h-4" />
               </div>
             </div>

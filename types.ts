@@ -46,10 +46,11 @@ export enum Step {
   PREVIEW = 'preview',
 }
 
-export type ModelProvider = 'gemini' | 'openai';
+export type ModelProvider = 'openai' | 'deepseek' | 'gemini';
 
 export interface AppSettings {
-  geminiApiKey: string;
   openaiApiKey: string;
+  deepseekApiKey: string;
+  geminiApiKey: string;
   activeProvider: ModelProvider;
 }
