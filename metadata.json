@@ -1,0 +1,5 @@
+{
+  "name": "ResuTailor AI",
+  "description": "Intelligent resume tailoring application that adapts your resume to specific job descriptions using Gemini 2.5 Flash.",
+  "requestFramePermissions": []
+}
