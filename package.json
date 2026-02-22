@@ -11,14 +11,15 @@
   },
   "dependencies": {
     "@google/genai": "^1.41.0",
-    "openai": "^4.28.0",
-    "lucide-react": "^0.574.0",
-    "react-dom": "^19.2.4",
-    "react": "^19.2.4",
     "docx": "^9.5.3",
     "file-saver": "^2.0.5",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.574.0",
     "mammoth": "^1.11.0",
-    "jszip": "^3.10.1"
+    "openai": "^4.28.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

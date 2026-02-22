@@ -6,6 +6,7 @@ import SettingsModal from './components/SettingsModal';
 import { tailorResumeOpenAI, createOptimizationPlan } from './services/openaiService';
 import { tailorResumeDeepSeek, createOptimizationPlanDeepSeek } from './services/deepseekService';
 import { tailorResumeGemini, createOptimizationPlanGemini } from './services/geminiService';
+import ReactMarkdown from 'react-markdown';
 import { FileText, Briefcase, Wand2, ArrowRight, Settings, Undo, LayoutDashboard, Terminal, BrainCircuit, Sparkles, Info, Loader2, AlertOctagon, RefreshCw, Zap } from 'lucide-react';
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -19,6 +20,7 @@ const App: React.FC = () => {
   const [step, setStep] = useState<Step>(Step.UPLOAD);
   const [resumeText, setResumeText] = useState<string>('');
   const [originalFile, setOriginalFile] = useState<File | null>(null);
+  const [originalFileBuffer, setOriginalFileBuffer] = useState<ArrayBuffer | null>(null);
   const [jobDescription, setJobDescription] = useState<string>('');
   const [tailoredData, setTailoredData] = useState<TailoredResumeData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +29,29 @@ const App: React.FC = () => {
   const [agentActivity, setAgentActivity] = useState<{agent: string | null, message: string}>({agent: null, message: ''});
   const [agentLogs, setAgentLogs] = useState<Array<{id: string, agent: string, message: string, timestamp: Date}>>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const [progressText, setProgressText] = useState("Initializing secure agent connection...");
+
+  useEffect(() => {
+    if (step !== Step.ANALYZING) return;
+    
+    const phrases = [
+      "Deep-scanning resume structure...",
+      "Aligning with core JD requirements...",
+      "Injecting elite industry terminology...",
+      "Restructuring for maximum ATS impact...",
+      "Applying 30-year executive insights...",
+      "Cross-validating technical keywords...",
+      "Polishing narrative flow...",
+      "Finalizing high-impact bullet points..."
+    ];
+    let i = 0;
+    setProgressText(phrases[0]);
+    const interval = setInterval(() => {
+      i++;
+      setProgressText(phrases[i % phrases.length]);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [step]);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -69,9 +94,17 @@ const App: React.FC = () => {
     localStorage.setItem('resuTailorSettings', JSON.stringify(newSettings));
   };
 
-  const handleResumeProcessed = (text: string, file?: File) => {
+  const handleResumeProcessed = async (text: string, file?: File) => {
     setResumeText(text);
-    if (file) setOriginalFile(file);
+    if (file) {
+      setOriginalFile(file);
+      try {
+        const buffer = await file.arrayBuffer();
+        setOriginalFileBuffer(buffer);
+      } catch (e) {
+        console.error("Failed to read file buffer", e);
+      }
+    }
   };
 
   const constructDraftResume = (original: string, modifications: any[]): string => {
@@ -140,19 +173,19 @@ const App: React.FC = () => {
       let iterations = 0;
       const MAX_ITERATIONS = 4;
 
-      addLog('SYSTEM', 'Initializing Dual-Agent Orchestrator v2.2...');
+      addLog('SYSTEM', 'Initializing Dual-Agent Orchestrator v2.3 (Advanced)...');
       await new Promise(r => setTimeout(r, 600));
 
       const provider = settingsRef.current.activeProvider;
-      let primaryAgentName = 'GPT-4o';
+      let primaryAgentName = 'GPT-5.2';
       let reviewerAgentName = 'DeepSeek-V3.2';
       
       if (provider === 'deepseek') {
         primaryAgentName = 'DeepSeek-V3.2';
-        reviewerAgentName = 'GPT-4o';
+        reviewerAgentName = 'GPT-5.2';
       } else if (provider === 'gemini') {
         primaryAgentName = 'Gemini 3.1 Pro';
-        reviewerAgentName = 'DeepSeek-V3.2';
+        reviewerAgentName = 'GPT-5.2';
       }
 
       addLog('SYSTEM', `Resume and JD shared between ${primaryAgentName} and ${reviewerAgentName}.`);
@@ -164,7 +197,8 @@ const App: React.FC = () => {
       };
 
       const runReviewerPlan = async () => {
-        if (provider === 'openai' || provider === 'gemini') return createOptimizationPlanDeepSeek(resumeText, jobDescription, settingsRef.current.deepseekApiKey);
+        if (provider === 'openai') return createOptimizationPlanDeepSeek(resumeText, jobDescription, settingsRef.current.deepseekApiKey);
+        if (provider === 'gemini') return createOptimizationPlan(resumeText, jobDescription, settingsRef.current.openaiApiKey);
         return createOptimizationPlan(resumeText, jobDescription, settingsRef.current.openaiApiKey);
       };
 
@@ -175,7 +209,8 @@ const App: React.FC = () => {
       };
 
       const runReviewerTailor = async (critiqueContext?: any) => {
-        if (provider === 'openai' || provider === 'gemini') return tailorResumeDeepSeek(resumeText, jobDescription, settingsRef.current.deepseekApiKey, critiqueContext);
+        if (provider === 'openai') return tailorResumeDeepSeek(resumeText, jobDescription, settingsRef.current.deepseekApiKey, critiqueContext);
+        if (provider === 'gemini') return tailorResumeOpenAI(resumeText, jobDescription, settingsRef.current.openaiApiKey, critiqueContext);
         return tailorResumeOpenAI(resumeText, jobDescription, settingsRef.current.openaiApiKey, critiqueContext);
       };
 
@@ -210,17 +245,52 @@ const App: React.FC = () => {
         setAgentActivity({ agent: reviewerAgentName, message: 'Auditing Draft...' });
         const atsResult = await executeWithRetry(() => runReviewerTailor({ previousModifications: data.modifications, auditorFeedback: "", currentScore: 0 }), reviewerAgentName);
 
-        addLog(reviewerAgentName, `AUDIT REPORT (v${version.toFixed(1)}):\nScore: ${atsResult.ats?.score || 85}%\n\nFeedback: ${atsResult.ats?.feedback || "No major issues."}`);
+        // --- NEW SPATIAL VALIDATION LOGIC (Advanced Version) ---
+        let originalLen = 0;
+        let newLen = 0;
+        data.modifications.forEach(mod => {
+          originalLen += (mod.original_excerpt || '').length;
+          newLen += (mod.new_content || '').length;
+        });
+        const lengthDiff = newLen - originalLen;
 
-        if ((atsResult.ats?.score || 85) >= 98) {
-          addLog(reviewerAgentName, 'No major changes needed. Resume is optimized.');
+        let lengthWarning = "";
+        let forceLengthCorrection = false;
+        
+        // Advanced prompt to prevent keyword loss during condensation
+        if (lengthDiff > 30) {
+          lengthWarning = `\n\nLAYOUT ADJUSTMENT REQUIRED: You added ${lengthDiff} excess characters, which breaks the physical page limit. You must condense the text by at least this amount. 
+          
+CRITICAL ATS INSTRUCTION: Do NOT remove technical keywords, metrics, or dilute the impact of the achievements to save space. 
+To condense effectively:
+- Remove filler adverbs (e.g., 'successfully', 'expertly').
+- Combine redundant concepts within the same bullet.
+- Tighten sentence structures.
+Keep the power, but shrink the footprint.`;
+          forceLengthCorrection = true;
+        } else if (lengthDiff < -150) {
+          lengthWarning = `\n\nLAYOUT WARNING: Your modifications removed ${Math.abs(lengthDiff)} characters. This might leave too much empty space on the last page. Consider slightly expanding the technical details to fill the gap naturally.`;
+        }
+
+        const finalFeedback = (atsResult.ats?.feedback || "No major issues.") + lengthWarning;
+        
+        addLog(reviewerAgentName, `AUDIT REPORT (v${version.toFixed(1)}):\nScore: ${atsResult.ats?.score || 85}%\n\nFeedback: ${finalFeedback}`);
+
+        // Block completion if the layout is violated, even if the ATS score is perfect
+        if ((atsResult.ats?.score || 85) >= 98 && !forceLengthCorrection) {
+          addLog(reviewerAgentName, 'No major changes needed and layout is perfectly preserved. Resume is optimized.');
           break;
         }
+        // ------------------------------------
 
         setAgentActivity({ agent: primaryAgentName, message: 'Refining...' });
         addLog(primaryAgentName, `Understood. Refining based on feedback → Version ${version.toFixed(1)}...`);
 
-        const refinedData = await executeWithRetry(() => runPrimaryTailor({ previousModifications: data.modifications, auditorFeedback: atsResult.ats?.feedback || "", currentScore: atsResult.ats?.score || 0 }), primaryAgentName);
+        const refinedData = await executeWithRetry(() => runPrimaryTailor({ 
+          previousModifications: data.modifications, 
+          auditorFeedback: finalFeedback, 
+          currentScore: atsResult.ats?.score || 0 
+        }), primaryAgentName);
 
         data = refinedData;
         currentDraftText = constructDraftResume(resumeText, data.modifications);
@@ -300,9 +370,9 @@ const App: React.FC = () => {
             <div className="hidden sm:flex flex-col items-end mr-2">
               <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">ACTIVE MODE</span>
               <span className="text-xs font-semibold text-slate-700">
-                {settings.activeProvider === 'openai' ? 'GPT-4o + DeepSeek-V3.2' : 
-                 settings.activeProvider === 'deepseek' ? 'DeepSeek-V3.2 + GPT-4o' : 
-                 'Gemini 3.1 Pro + DeepSeek-V3.2'}
+                {settings.activeProvider === 'openai' ? 'GPT-5.2 + DeepSeek-V3.2' : 
+                 settings.activeProvider === 'deepseek' ? 'DeepSeek-V3.2 + GPT-5.2' : 
+                 'Gemini 3.1 Pro + GPT-5.2'}
               </span>
             </div>
             <button onClick={() => setIsSettingsOpen(true)} className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition-all">
@@ -323,7 +393,7 @@ const App: React.FC = () => {
               </p>
             </div>
 
-            {/* Upload + JD UI - unchanged */}
+            {/* Upload + JD UI */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-2 mb-4">
@@ -385,12 +455,16 @@ const App: React.FC = () => {
                 <div className="flex gap-6">
                   {/* Agent Status */}
                   <div className={`flex items-center gap-3 transition-opacity duration-300 opacity-100`}>
-                    <div className={`p-2 rounded-lg bg-slate-200 text-slate-500`}>
-                      <BrainCircuit className="w-5 h-5" />
+                    <div className={`p-2 rounded-lg bg-indigo-100 text-indigo-600`}>
+                      <BrainCircuit className="w-5 h-5 animate-pulse" />
                     </div>
                     <div>
-                      <div className="text-sm font-bold text-slate-900">Agents Active</div>
-                      <div className="text-xs text-slate-500">{agentActivity.message || 'Waiting...'}</div>
+                      <div className="text-sm font-bold text-slate-900">
+                        {agentActivity.agent ? `${agentActivity.agent} is active` : 'Agents Active'}
+                      </div>
+                      <div className="text-xs text-indigo-600 font-medium animate-pulse">
+                        {progressText}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -434,7 +508,9 @@ const App: React.FC = () => {
                               <span className="text-[10px] font-mono text-slate-500">{log.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                             </div>
                             <div className={`p-4 shadow-sm text-sm leading-relaxed whitespace-pre-wrap font-medium rounded-2xl ${getAgentBubbleClass(log.agent, isRight)}`}>
-                              {log.message}
+                              <div className="markdown-body">
+                                <ReactMarkdown>{log.message}</ReactMarkdown>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -485,7 +561,7 @@ const App: React.FC = () => {
                 Make Another Resume
               </button>
             </div>
-            <ResumePreview data={tailoredData} originalFile={originalFile} originalText={resumeText} />
+            <ResumePreview data={tailoredData} originalFile={originalFile} originalFileBuffer={originalFileBuffer} originalText={resumeText} />
           </div>
         )}
       </main>

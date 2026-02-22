@@ -6,18 +6,22 @@ import { modifyAndDownloadDocx } from '../services/documentService';
 interface ResumePreviewProps {
   data: TailoredResumeData;
   originalFile: File | null;
+  originalFileBuffer: ArrayBuffer | null;
   originalText: string;
 }
 
-const ResumePreview: React.FC<ResumePreviewProps> = ({ data, originalFile, originalText }) => {
+const ResumePreview: React.FC<ResumePreviewProps> = ({ data, originalFile, originalFileBuffer, originalText }) => {
   const [activeTab, setActiveTab] = useState<'agents' | 'modifications' | 'livedoc'>('agents');
 
   const handleDownload = async () => {
-    if (!originalFile) {
+    if (!originalFile || !originalFileBuffer) {
       alert("Original file missing. Please re-upload.");
       return;
     }
-    await modifyAndDownloadDocx(originalFile, data.modifications, "Tailored_Resume.docx");
+    
+    // Create a new File object from the buffer to ensure it's fresh
+    const freshFile = new File([originalFileBuffer], originalFile.name, { type: originalFile.type });
+    await modifyAndDownloadDocx(freshFile, data.modifications, "Tailored_Resume.docx");
   };
 
   // Generate the "Live Doc" view
@@ -122,16 +126,18 @@ const ResumePreview: React.FC<ResumePreviewProps> = ({ data, originalFile, origi
               <ArrowRight className="w-4 h-4 text-slate-300" />
               <div className="flex flex-col">
                 <span className="text-xs text-slate-500">Elite Content</span>
-                <span className={`font-mono text-sm font-semibold ${lengthStats.diff > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                <span className={`font-mono text-sm font-semibold ${lengthStats.diff > 30 ? 'text-amber-600' : 'text-green-600'}`}>
                   {lengthStats.newLen} chars
                 </span>
               </div>
             </div>
             <div className="mt-2 text-xs font-medium">
-              {lengthStats.diff > 0 ? (
+              {lengthStats.diff > 30 ? (
                 <span className="text-amber-600 flex items-center gap-1"><AlertOctagon className="w-3 h-3"/> Slightly longer (+{lengthStats.diff} chars). May affect pagination.</span>
+              ) : lengthStats.diff < -30 ? (
+                <span className="text-blue-600 flex items-center gap-1"><CheckCircle className="w-3 h-3"/> Layout secured ({Math.abs(lengthStats.diff)} chars condensed).</span>
               ) : (
-                <span className="text-green-600 flex items-center gap-1"><CheckCircle className="w-3 h-3"/> Layout preserved ({lengthStats.diff} chars).</span>
+                <span className="text-green-600 flex items-center gap-1"><CheckCircle className="w-3 h-3"/> Layout perfectly preserved ({lengthStats.diff > 0 ? '+' : ''}{lengthStats.diff} chars).</span>
               )}
             </div>
         </div>
@@ -258,10 +264,10 @@ const ResumePreview: React.FC<ResumePreviewProps> = ({ data, originalFile, origi
                   {/* Left: Metadata */}
                   <div className="bg-slate-50 p-4 md:w-48 border-b md:border-b-0 md:border-r border-slate-200 flex flex-col justify-center">
                     <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Section</span>
-                    <div className="font-semibold text-slate-700 mb-4">{mod.section}</div>
+                    <div className="font-semibold text-slate-700 mb-4">{mod.section || 'General'}</div>
                     
                     <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Strategy</span>
-                    <div className="text-xs text-indigo-600 leading-snug">{mod.reason}</div>
+                    <div className="text-xs text-indigo-600 leading-snug">{mod.reason || 'Optimization'}</div>
                   </div>
 
                   {/* Right: Diff */}
