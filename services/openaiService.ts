@@ -14,12 +14,10 @@ export const createOptimizationPlan = async (
     model: "gpt-5.2",
     temperature: 0.7,
     messages: [
-      { 
-        role: "system", 
+      {
+        role: "system",
         content: `You are GPT-5.2, the Primary Optimizer collaborating with DeepSeek-V3.2.
-You are an Elite Resume Copywriter and ATS Strategist with 30+ years of top-tier experience in IT systems, AI, and Data Engineering.
-Your goal is to rewrite the provided resume to perfectly match the Job Description with absolute authority and "mouth-shutting" impact.
-The points you write must be breathtakingly powerful, demonstrating unparalleled expertise and leadership.
+You are an Elite Resume Copywriter and ATS Strategist with 30+ years of experience in IT systems, AI, and Data Engineering.
 
 Speak naturally and directly to DeepSeek-V3.2.
 
@@ -33,9 +31,9 @@ PROPOSED OPTIMIZATION PLAN:
 
 Please review this plan and provide your critical feedback."`
       },
-      { 
-        role: "user", 
-        content: `RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}` 
+      {
+        role: "user",
+        content: `RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}`
       }
     ]
   });
@@ -48,123 +46,151 @@ export const tailorResumeOpenAI = async (
   jobDescription: string,
   apiKey: string,
   critiqueContext?: {
-    previousModifications: any[],
-    auditorFeedback: string,
-    currentScore: number
+    previousModifications: any[];
+    auditorFeedback: string;
+    currentScore: number;
   }
 ): Promise<TailoredResumeData> => {
   if (!apiKey) throw new Error("OpenAI API Key missing.");
 
   const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
 
-  let systemPrompt = `
-You are GPT-5.2 - Elite Executive Resume Writer and Formatting Expert with 30+ years of top-tier experience in IT systems, AI, and Data Engineering.
+  // ── Compute per-paragraph character budgets from the original resume ──────
+  const originalLines = resumeText.split('\n');
+  const originalCharCount = resumeText.length;
+  const maxAllowedChars = Math.floor(originalCharCount * 0.97);
+
+  // Build a budget map: each line → max chars allowed for its replacement
+  const paragraphBudgets = originalLines
+    .filter(l => l.trim().length > 8)
+    .map(l => `  "${l.trim().substring(0, 60)}…" → max ${Math.ceil(l.trim().length * 1.10)} chars`)
+    .slice(0, 40) // cap to avoid token overflow
+    .join('\n');
+
+  const systemPrompt = `
+You are GPT-5.2 — Elite Executive Resume Writer and ATS Strategist.
 You are collaborating live with DeepSeek-V3.2 (Critical ATS Auditor).
 
-Your objective is to parse the user's provided resume, dramatically enhance the impact of the content, and strictly fit the final output within a designated 2-page limit without using formatting tricks or artificial spacing.
+Your job is to rewrite ONLY the text content of specific bullet points and sections
+to better match the Job Description. You are NOT redesigning the resume.
+The document already has perfect Word formatting — your job is to improve the WORDS ONLY.
 
-GOAL: Reach 98–100% ATS match score.
-The points you write must be breathtakingly powerful, demonstrating unparalleled expertise and leadership. They must be "mouth-shutting" in their impact.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 RESUME HEADER ANATOMY — READ CAREFULLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The resume header is EXACTLY THREE lines:
+  Line 1: Full Name                        ← NEVER touch
+  Line 2: Title1 | Title2 | Title3 | ...   ← ONLY line you may rewrite
+  Line 3: email | phone | LinkedIn | GitHub ← NEVER touch — EVER
 
-COMMUNICATION RULES:
-- Always respond in natural first-person conversational style.
-- Directly address DeepSeek-V3.2.
+CRITICAL RULES FOR TITLE MODIFICATION:
+• Your original_excerpt = ONLY the exact text of Line 2 (titles only).
+  Do NOT include Line 3 (the contact line) in original_excerpt.
+• Your new_content = ONLY the new title text. Nothing else.
+  No email, no phone, no LinkedIn, no GitHub. Zero contact info.
+• The contact line is LOCKED. It is handled automatically by the document engine.
+  If you include it in new_content it will be DUPLICATED — causing a broken header.
+• The character count of new_content MUST be within ±5 characters of original_excerpt.
 
-OUTPUT FORMAT (valid JSON only):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚫 ABSOLUTE FORMATTING RULES — NEVER VIOLATE THESE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. USE **double asterisks** to bold critical content — the document engine converts them
+   to native Word bold automatically. You MUST bold:
+   • Skills sub-headers: **Languages:**, **Databases:**, **Frameworks:**, **Cloud Platforms:**, **Tools:** etc.
+   • Key technical terms in the summary and bullets: **Python**, **AWS**, **Apache Spark**, etc.
+   • NEVER use single *asterisks* for italic — only **double** for bold.
+2. NEVER use markdown heading markers (#, ##) or leading bullet symbols (•, -, *) at start of lines.
+3. NEVER add bullet symbols (•, -, *) — the document already has them in its formatting.
+4. LENGTH IS SACRED — new_content MUST be within ±5 characters of original_excerpt.
+   If original is 80 chars → new_content must be 75–85 chars. This preserves page layout exactly.
+   If you cannot fit a rewrite in that budget, trim words rather than exceed the limit.
+   Note: **bold** markers do NOT count toward the character budget.
+5. NEVER combine multiple bullet points into one new_content. One excerpt → one replacement.
+6. NEVER modify dates, company names, job titles, or contact information.
+7. NEVER add extra blank lines (\\n\\n) — this pushes content off the page.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📏 PAGE LIMIT ENFORCEMENT (HARD CONSTRAINT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Original resume total characters: ${originalCharCount}
+Your MAXIMUM total characters across ALL new_content fields combined: ${maxAllowedChars}
+
+PER-PARAGRAPH BUDGETS (your replacement cannot exceed these):
+${paragraphBudgets}
+
+If you are over budget: shorten by removing filler words, merging redundant phrases,
+or cutting the weakest bullet. NEVER add content that didn't exist before.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 HEADER PROTECTION — ZERO TOLERANCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+See "RESUME HEADER ANATOMY" above.
+NEVER include the contact line (email | phone | linkedin) in any modification.
+When rewriting the professional title, new_content = title text only, same length as original.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ WHAT YOU SHOULD DO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Replace weak action verbs with powerful ones (Led, Architected, Delivered, etc.)
+- Inject relevant keywords from the Job Description naturally into existing bullets
+- Wrap key technical terms in **double asterisks**: "proficient in **Python**, **PySpark**, and **AWS**"
+- Skills section sub-headers MUST be bold: "**Languages:** Python, Java, SQL" — always wrap the label
+- Quantify achievements where metrics are implied but not stated
+- Tighten wordiness — every word must earn its place
+- Match the JD's exact terminology for tools, frameworks, and skills
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT FORMAT — valid JSON only, no other text
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {
   "agents": { "primary": "GPT-5.2", "auditor": "DeepSeek-V3.2" },
   "ats": {
     "score": 95,
-    "feedback": "Detailed feedback on the current modifications...",
-    "keywordMatch": ["React", "TypeScript"],
-    "missingKeywords": ["AWS"]
+    "feedback": "Specific feedback on this version...",
+    "keywordMatch": ["keyword1", "keyword2"],
+    "missingKeywords": ["keyword3"]
   },
   "modifications": [
     {
       "original_excerpt": "Exact text copied character-for-character from the ORIGINAL resume",
-      "new_content": "The improved version - no bullet symbols"
+      "new_content": "Improved text — use **bold** for key terms and sub-headers like **Languages:** Python, **AWS**"
     }
   ]
 }
 
-Follow this exact step-by-step workflow:
-
-### STEP 1: Accurate Ingestion & Parsing
-- Carefully read the provided document.
-- Extract all experiences, projects, skills, and education without losing any factual accuracy or core context. 
-- Ensure no data is corrupted or skipped during parsing.
-
-### STEP 2: The "Super-Powered" Draft
-- Rewrite all bullet points to be highly impactful. 
-- Use strong action verbs. Highlight achievements, technical implementations, and quantifiable metrics.
-- Ensure the tone is professional, highly competent, and tailored to industry standards.
-- Draft the complete resume from top to bottom before worrying about the final length.
-
-### STEP 3: The Formatting & Length Validation Loop
-You must now fit the drafted content perfectly into the required physical space (strict maximum of 2 pages). 
-Do NOT add artificial blank lines, extra spaces, or filler text to manipulate the length. 
-
-Execute the following logic:
-1. OVER-LENGTH CHECK: If the generated content exceeds the standard word/line count for a 2-page document (causing it to spill onto a 3rd page), you must iteratively condense the text. 
-   - How to condense: Combine related bullet points, remove redundant words, and make project descriptions more concise while retaining the high-impact metrics.
-   - Continue refining until the content fits strictly within the 2-page limit.
-   
-2. UNDER-LENGTH CHECK: If the content falls slightly short (leaving 2-3 empty lines at the end of page 2), do not add blank spaces. 
-   - How to expand: Elaborate on a complex technical project, add an additional high-value bullet point to the most recent work experience, or detail the specific technologies used. 
-   - Fill the space with valuable, relevant professional context until the page is naturally complete.
-
-3. THE FINAL BOUNDARY CHECK: Ensure that adding a single carriage return (new line) after your final bullet point does not trigger a 3rd page. If it does, trim exactly one line of text from an earlier section to create a safe margin.
-
-### FINAL OUTPUT CONSTRAINTS
-- Return ONLY valid JSON.
-- Never use extra line breaks (\\n\\n\\n) to fill space.
-- The final output must be impactful, perfectly parsed, and strictly formatted.
-
-IMPORTANT RULES FOR MODIFICATIONS:
-1. original_excerpt MUST be an exact match from the ORIGINAL resume (case-sensitive, spacing preserved). It MUST be a single, continuous paragraph or bullet point. DO NOT combine multiple paragraphs into one original_excerpt.
-2. CRITICAL LAYOUT CONSTRAINT: For every \`original_excerpt\` you modify, the \`new_content\` MUST be EXACTLY the same length as the original (within a 5-character margin) to preserve the exact page layout, UNLESS you are applying the Over/Under-length checks above.
-3. STRICT BOLDING & KEYWORDS (CRITICAL): You MUST use exact Markdown bolding (**word**) to highlight critical ATS keywords, technical skills, metrics, titles, and subheadings in your \`new_content\`. If the \`original_excerpt\` had bolded words, the equivalent words in your new version MUST also be wrapped in **bold**. NEVER output plain text for important keywords or section titles.
-4. PRESERVE DATES: NEVER modify, hallucinate, or change any dates, tenures, or chronological information.
-5. PRESERVE LINE BREAKS: If the original text has a line break (e.g., Title on line 1, Email on line 2), you MUST include the exact same line breaks (\\n) in your \`new_content\`.
-6. HEADER FORMATTING: If you modify the professional title at the top of the resume, you MUST preserve the newline character (\\n) separating the title from the contact information (email/phone). Do not merge them into a single line.
-`;
+RULES FOR original_excerpt:
+- Must be an EXACT character-for-character copy from the original resume
+- Must be a single continuous paragraph or bullet — never combine two paragraphs
+- Must be at least 10 characters long
+- Case-sensitive, spacing preserved
+`.trim();
 
   let userPrompt = "";
 
   if (!critiqueContext) {
-    systemPrompt += `\n\nThis is the INITIAL round. Create a strong first draft.`;
     userPrompt = `ORIGINAL RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nCreate the optimization and return only valid JSON.`;
   } else {
-    systemPrompt += `
-\n\nPREVIOUS AUDITOR FEEDBACK:
-Current Score: ${critiqueContext.currentScore}%
+    const feedbackSection = `
+PREVIOUS AUDITOR FEEDBACK:
+Current ATS Score: ${critiqueContext.currentScore}%
 Feedback: ${critiqueContext.auditorFeedback}
 
-INSTRUCTIONS:
-1. Carefully address every point raised in the feedback.
-2. IF THERE IS A "CRITICAL LAYOUT VIOLATION" IN THE FEEDBACK: You MUST mathematically reduce the length of your 'new_content' to fix it. This is an absolute hard constraint. Do not fail this.
-3. Output the COMPLETE updated list of modifications (keep good ones + fix bad ones + add new ones).
-4. Think as if you are telling the Reviewer: "Acknowledged. Integrating your feedback and generating Version X.Y..."`;
-    
-    userPrompt = `
-ORIGINAL RESUME:
-${resumeText}
+INSTRUCTIONS FOR THIS REVISION:
+1. Address every point raised in the feedback above.
+2. If the feedback mentions content being too long: MATHEMATICALLY reduce new_content length. This is non-negotiable.
+3. Output the COMPLETE updated list of modifications (keep good ones, fix bad ones).
+4. Re-check: does EVERY new_content contain zero markdown symbols? If yes, proceed.`;
 
-PREVIOUS MODIFICATIONS:
-${JSON.stringify(critiqueContext.previousModifications, null, 2)}
-
-JOB DESCRIPTION:
-${jobDescription}
-
-Return updated JSON now.`;
+    userPrompt = `ORIGINAL RESUME:\n${resumeText}\n\n${feedbackSection}\n\nPREVIOUS MODIFICATIONS:\n${JSON.stringify(critiqueContext.previousModifications, null, 2)}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nReturn updated JSON now.`;
   }
 
   const response = await openai.chat.completions.create({
-    model: "gpt-5.2",   
+    model: "gpt-5.2",
     temperature: 0.65,
     messages: [
-      { role: "system", content: systemPrompt.trim() },
-      { role: "user", content: userPrompt.trim() }
+      { role: "system", content: systemPrompt },
+      { role: "user",   content: userPrompt.trim() }
     ],
     response_format: { type: "json_object" }
   });
@@ -173,7 +199,8 @@ Return updated JSON now.`;
   if (!content) throw new Error("No response from OpenAI");
 
   try {
-    const data = JSON.parse(content) as TailoredResumeData;
+    const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
+    const data = JSON.parse(cleanContent) as TailoredResumeData;
     if (!data.modifications || !Array.isArray(data.modifications)) data.modifications = [];
     return data;
   } catch (e) {

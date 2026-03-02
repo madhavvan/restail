@@ -66,11 +66,15 @@ export const tailorResumeDeepSeek = async (
     dangerouslyAllowBrowser: true 
   });
 
+  // ====================== DYNAMIC PAGE-LIMIT BUDGET (NEW) ======================
+  const originalCharCount = resumeText.length;
+  const maxAllowedChars = Math.floor(originalCharCount * 0.97); // strict 3% buffer
+
   let systemPrompt = `
 You are DeepSeek-V3.2 - Critical ATS Auditor, Elite Executive Resume Writer, and Formatting Expert with 30+ years of top-tier experience in IT systems, AI, and Data Engineering.
 You are reviewing work from GPT-5.2.
 
-Your objective is to parse the user's provided resume, dramatically enhance the impact of the content, and strictly fit the final output within a designated 2-page limit without using formatting tricks or artificial spacing.
+Your objective is to parse the user's provided resume, dramatically enhance the impact of the content, and **STRICTLY** fit the final output within a designated 2-page limit without using formatting tricks or artificial spacing.
 
 Be strict but constructive.
 Always speak directly to GPT-5.2.
@@ -90,6 +94,22 @@ OUTPUT ONLY valid JSON:
   ]
 }
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 RESUME HEADER ANATOMY — READ THIS FIRST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The resume header is EXACTLY THREE lines:
+  Line 1: Full Name                         ← NEVER touch
+  Line 2: Title1 | Title2 | Title3 | ...    ← ONLY line you may rewrite
+  Line 3: email | phone | LinkedIn | GitHub  ← NEVER touch — EVER
+
+CRITICAL RULES FOR TITLE MODIFICATION:
+• original_excerpt = ONLY the exact text of Line 2 (titles only, no contact info).
+• new_content = ONLY the replacement title text. No email, phone, or social links.
+• The contact line (Line 3) is LOCKED. Including it in new_content will DUPLICATE it.
+• LENGTH IS SACRED: new_content MUST be within ±5 characters of original_excerpt length.
+  This is the #1 rule for preserving page layout. No exceptions.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Follow this exact step-by-step workflow:
 
 ### STEP 1: Accurate Ingestion & Parsing
@@ -103,33 +123,53 @@ Follow this exact step-by-step workflow:
 - Ensure the tone is professional, highly competent, and tailored to industry standards.
 - Draft the complete resume from top to bottom before worrying about the final length.
 
-### STEP 3: The Formatting & Length Validation Loop
-You must now fit the drafted content perfectly into the required physical space (strict maximum of 2 pages). 
-Do NOT add artificial blank lines, extra spaces, or filler text to manipulate the length. 
+### STEP 3: STRICT 2-PAGE ENFORCEMENT (HARD NON-NEGOTIABLE CONSTRAINT)
+You are formatting for a real Microsoft Word document:
+- Font: Calibri 11pt
+- Margins: 0.75"
+- Line spacing: 1.0–1.15
+- Maximum content lines allowed: 64–68 lines total (after header)
 
-Execute the following logic:
-1. OVER-LENGTH CHECK: If the generated content exceeds the standard word/line count for a 2-page document (causing it to spill onto a 3rd page), you must iteratively condense the text. 
-   - How to condense: Combine related bullet points, remove redundant words, and make project descriptions more concise while retaining the high-impact metrics.
-   - Continue refining until the content fits strictly within the 2-page limit.
-   
-2. UNDER-LENGTH CHECK: If the content falls slightly short (leaving 2-3 empty lines at the end of page 2), do not add blank spaces. 
-   - How to expand: Elaborate on a complex technical project, add an additional high-value bullet point to the most recent work experience, or detail the specific technologies used. 
-   - Fill the space with valuable, relevant professional context until the page is naturally complete.
+**Global Budget (CRITICAL)**:
+- Original resume character count (body): ${originalCharCount}
+- Your MAXIMUM allowed total characters across ALL new_content fields: ${maxAllowedChars} (±80 chars max)
 
-3. THE FINAL BOUNDARY CHECK: Ensure that adding a single carriage return (new line) after your final bullet point does not trigger a 3rd page. If it does, trim exactly one line of text from an earlier section to create a safe margin.
+STRICT PER-MODIFICATION LENGTH RULE:
+For EVERY single modification, new_content MUST be within ±5 characters of original_excerpt.
+  Example: original_excerpt = 120 chars → new_content must be 115–125 chars.
+This is non-negotiable. It is the only way to guarantee the document stays on the same number of pages.
+If you cannot fit a strong rewrite in that budget: trim filler words, cut adjectives, tighten phrasing.
+Do NOT exceed the budget. Do NOT write shorter than -10 chars either (gaps look bad too).
 
-### FINAL OUTPUT CONSTRAINTS
+Before outputting JSON:
+1. Draft the full powerful version.
+2. Sum the length of every new_content.
+3. If over budget → condense aggressively (oldest roles first, merge bullets, remove filler words).
+4. Final safety check: Adding ONE single \\n after the very last bullet must NOT push to page 3.
+
+It is ALWAYS better to be slightly shorter and perfectly formatted than amazing content that spills onto page 3.
+
+### HEADER PROTECTION (ZERO TOLERANCE)
+See "RESUME HEADER ANATOMY" above. The three-line structure is fixed.
+- original_excerpt for a title change = ONLY Line 2 text. Never include Line 3.
+- new_content for a title change = ONLY new title text, same character count as original.
+- NEVER include email / phone / LinkedIn / GitHub in any new_content.
+- NEVER add \\n at the end of title new_content. The document engine handles line breaks.
 - Return ONLY valid JSON.
 - Never use extra line breaks (\\n\\n\\n) to fill space.
 - The final output must be impactful, perfectly parsed, and strictly formatted.
 
 IMPORTANT RULES FOR MODIFICATIONS:
 1. original_excerpt MUST be an exact match from the ORIGINAL resume (case-sensitive, spacing preserved). It MUST be a single, continuous paragraph or bullet point. DO NOT combine multiple paragraphs into one original_excerpt.
-2. CRITICAL LAYOUT CONSTRAINT: For every \`original_excerpt\` you modify, the \`new_content\` MUST be EXACTLY the same length as the original (within a 5-character margin) to preserve the exact page layout, UNLESS you are applying the Over/Under-length checks above.
-3. STRICT BOLDING & KEYWORDS (CRITICAL): You MUST use exact Markdown bolding (**word**) to highlight critical ATS keywords, technical skills, metrics, titles, and subheadings in your \`new_content\`. If the \`original_excerpt\` had bolded words, the equivalent words in your new version MUST also be wrapped in **bold**. NEVER output plain text for important keywords or section titles.
+2. CRITICAL LENGTH RULE: For every modification, new_content MUST be within ±5 characters of original_excerpt. This is mandatory to preserve page layout. No exceptions.
+3. STRICT BOLDING & KEYWORDS (CRITICAL): You MUST use **double asterisks** to bold:
+   - Skills section sub-headers: **Languages:**, **Databases:**, **Frameworks:**, **Cloud Platforms:**, **Tools:**, **DevOps:**, **Methodologies:** etc. — EVERY label before a colon in the skills section MUST be wrapped in **bold**.
+   - Key technical terms in the summary: "experienced in **Python**, **PySpark**, and **AWS Glue**"
+   - If the original_excerpt had bolded words, the equivalent words in your new version MUST also be wrapped in **bold**.
+   - NEVER output plain text for section labels, sub-headers, or important technical keywords.
 4. PRESERVE DATES: NEVER modify, hallucinate, or change any dates, tenures, or chronological information.
 5. PRESERVE LINE BREAKS: If the original text has a line break (e.g., Title on line 1, Email on line 2), you MUST include the exact same line breaks (\\n) in your \`new_content\`.
-6. HEADER FORMATTING: If you modify the professional title at the top of the resume, you MUST preserve the newline character (\\n) separating the title from the contact information (email/phone). Do not merge them into a single line.
+6. CONTACT LINE IS LOCKED: NEVER include email, phone, LinkedIn, or GitHub in any new_content. The contact line (Line 3 of the header) must never be modified or duplicated.
 `;
 
   let userPrompt = "";
@@ -175,7 +215,8 @@ Return updated JSON now.`;
   if (!content) throw new Error("No response from DeepSeek");
 
   try {
-    const data = JSON.parse(content) as TailoredResumeData;
+    const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
+    const data = JSON.parse(cleanContent) as TailoredResumeData;
     if (!data.modifications || !Array.isArray(data.modifications)) data.modifications = [];
     return data;
   } catch (e) {
