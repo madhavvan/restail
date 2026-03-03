@@ -441,6 +441,124 @@ const App: React.FC = () => {
     return draft;
   };
 
+  /**
+   * Intelligent trimming helper for enforcePageLimit.
+   * Mirrors the sentence-aware logic from enforceLengthBudget in documentService.ts.
+   *
+   * KEY FIXES vs the old implementation:
+   *   1. Works on the ORIGINAL new_content (with **bold** markers intact).
+   *   2. Measures character length WITHOUT bold markers but preserves them in output.
+   *   3. Uses sentence-aware cutting (period, semicolon) instead of dumb substring.
+   *   4. Strips dangling prepositions/conjunctions.
+   *   5. Ensures proper punctuation at the end.
+   */
+  const DANGLING_TAIL = /\s+(by|via|with|and|or|for|to|in|of|the|a|an|as|at|on|into|from|using|through|across|than|&)\s*$/i;
+
+  const smartTrim = (text: string, maxVisibleChars: number): string => {
+    // Measure visible length (without bold markers)
+    const visibleText = text.replace(/\*\*([^*]+)\*\*/g, '$1');
+    if (visibleText.length <= maxVisibleChars) return text;
+
+    // To trim text-with-bold-markers we need to walk through the original text,
+    // counting only visible characters, and cut at the right position.
+    let visibleCount = 0;
+    let cutPos = text.length;
+    let inBold = false;
+    for (let i = 0; i < text.length; i++) {
+      // Detect ** bold markers
+      if (text[i] === '*' && text[i + 1] === '*') {
+        inBold = !inBold;
+        i++; // skip second *
+        continue;
+      }
+      visibleCount++;
+      if (visibleCount >= maxVisibleChars) {
+        cutPos = i + 1;
+        break;
+      }
+    }
+
+    let hardCut = text.substring(0, cutPos);
+    // Close any unclosed bold markers
+    const openBolds = (hardCut.match(/\*\*/g) || []).length;
+    if (openBolds % 2 !== 0) hardCut += '**';
+
+    const stripped = hardCut.replace(/\*\*([^*]+)\*\*/g, '$1');
+
+    // Strategy 1: Find last complete sentence (period)
+    const lastPeriod = Math.max(
+      stripped.lastIndexOf('. '),
+      stripped.lastIndexOf('.\n'),
+      stripped.endsWith('.') ? stripped.length - 1 : -1
+    );
+    if (lastPeriod > maxVisibleChars * 0.55) {
+      const sentenceEnd = stripped.substring(0, lastPeriod + 1).trim();
+      return rebuildWithBold(text, sentenceEnd.length);
+    }
+
+    // Strategy 2: Find last clause (semicolon)
+    const lastSemicolon = stripped.lastIndexOf('; ');
+    if (lastSemicolon > maxVisibleChars * 0.55) {
+      const clauseEnd = stripped.substring(0, lastSemicolon + 1).trim() + '.';
+      return rebuildWithBold(text, lastSemicolon + 1) + '.';
+    }
+
+    // Strategy 3: Cut at word boundary + clean dangling words
+    let result = hardCut;
+    const lastSpace = stripped.lastIndexOf(' ');
+    if (lastSpace > maxVisibleChars * 0.4) {
+      result = rebuildWithBold(text, lastSpace);
+    }
+
+    // Remove dangling prepositions/conjunctions (multiple passes)
+    let plain = result.replace(/\*\*([^*]+)\*\*/g, '$1');
+    let passes = 0;
+    while (DANGLING_TAIL.test(plain) && passes < 5) {
+      plain = plain.replace(DANGLING_TAIL, '').trim();
+      passes++;
+    }
+    if (passes > 0) {
+      result = rebuildWithBold(text, plain.length);
+    }
+
+    // Remove trailing comma, colon, or ampersand
+    result = result.replace(/[,;:&]\s*$/, '').trim();
+
+    // Ensure proper punctuation
+    const finalPlain = result.replace(/\*\*([^*]+)\*\*/g, '$1');
+    if (finalPlain && !/[.!?%)"]$/.test(finalPlain)) {
+      result += '.';
+    }
+
+    return result;
+  };
+
+  /**
+   * Rebuild the original text (with bold markers) up to `visibleLen` visible characters.
+   * Ensures bold markers are properly closed.
+   */
+  const rebuildWithBold = (original: string, visibleLen: number): string => {
+    let visible = 0;
+    let pos = 0;
+    let inBold = false;
+
+    while (pos < original.length && visible < visibleLen) {
+      if (original[pos] === '*' && original[pos + 1] === '*') {
+        inBold = !inBold;
+        pos += 2;
+        continue;
+      }
+      visible++;
+      pos++;
+    }
+
+    let result = original.substring(0, pos).trim();
+    // Close any unclosed bold markers
+    const openBolds = (result.match(/\*\*/g) || []).length;
+    if (openBolds % 2 !== 0) result += '**';
+    return result;
+  };
+
   const enforcePageLimit = (data: TailoredResumeData, originalText: string): TailoredResumeData => {
     const originalLines = originalText.split('\n').length;
     const originalChars = originalText.length;
@@ -473,20 +591,17 @@ const App: React.FC = () => {
       if (remaining <= 0) break;
       const mod      = mods[idx];
       const origLen  = (mod.original_excerpt || '').length;
-      const stripped = (mod.new_content || '').replace(/\*\*([^*]+)\*\*/g, '$1');
+      const currentVisibleLen = (mod.new_content || '').replace(/\*\*([^*]+)\*\*/g, '$1').length;
 
-      const targetLen = Math.max(origLen, stripped.length - remaining);
-      if (targetLen >= stripped.length) continue;
+      const targetLen = Math.max(origLen, currentVisibleLen - remaining);
+      if (targetLen >= currentVisibleLen) continue;
 
-      const trimmed   = stripped.substring(0, targetLen);
-      const lastSpace = trimmed.lastIndexOf(' ');
-      const final     = lastSpace > targetLen * 0.7
-        ? trimmed.substring(0, lastSpace).trimEnd()
-        : trimmed.trimEnd();
-
-      const saved      = stripped.length - final.length;
-      remaining       -= saved;
-      mods[idx]        = { ...mod, new_content: final };
+      // Use intelligent trimming that preserves bold markers and sentence integrity
+      const trimmedContent = smartTrim(mod.new_content || '', targetLen);
+      const trimmedVisibleLen = trimmedContent.replace(/\*\*([^*]+)\*\*/g, '$1').length;
+      const saved = currentVisibleLen - trimmedVisibleLen;
+      remaining -= saved;
+      mods[idx] = { ...mod, new_content: trimmedContent };
     }
 
     const finalDraft = constructDraft(originalText, mods);
@@ -707,7 +822,26 @@ const App: React.FC = () => {
 
       setThinking({ agent: primaryName, action: 'Finalizing Version 1.1…' });
       const finalData = await withRetry(
-        () => runPrimaryTailor({ previousModifications: data.modifications, auditorFeedback: atsResult.ats?.feedback ?? '', currentScore: auditScore }),
+        () => runPrimaryTailor({
+          previousModifications: data.modifications,
+          // ✅ Strip any preamble lines Gemini/reviewer may have added before the actual feedback
+          auditorFeedback: (atsResult.ats?.feedback ?? '')
+            .split('\n')
+            .filter(line => {
+              const l = line.trim().toLowerCase();
+              return !(
+                l.startsWith('acknowledged') ||
+                l.startsWith('audit report') ||
+                l.startsWith('ats score:') ||
+                l.startsWith('version ') ||
+                l.startsWith('integrating your') ||
+                l.startsWith('understood.')
+              );
+            })
+            .join('\n')
+            .trim(),
+          currentScore: auditScore,
+        }),
         primaryName
       );
       setThinking(null);
@@ -727,6 +861,13 @@ const App: React.FC = () => {
       addLog('SYSTEM', 'Running final page-limit check…');
       await new Promise(r => setTimeout(r, 500));
       data = enforcePageLimit(data, resumeText);
+
+      // ── Re-sync live preview buffer with the final (post-trim) modifications ──
+      // This ensures the preview exactly matches what the user downloads.
+      if (data.modifications?.length > 0) {
+        await updateLiveDoc(data.modifications);
+      }
+
       addLog('SYSTEM', `🎉 Done! ${data.modifications?.length ?? 0} modifications ready. Preparing download…`);
       await new Promise(r => setTimeout(r, 1200));
 

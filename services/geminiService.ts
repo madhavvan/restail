@@ -324,7 +324,7 @@ INSTRUCTIONS:
 1. Carefully address every point raised in the feedback.
 2. IF THERE IS A "CRITICAL LAYOUT VIOLATION" IN THE FEEDBACK: You MUST mathematically reduce the length of your 'new_content' to fix it. This is an absolute hard constraint. Do not fail this.
 3. Output the COMPLETE updated list of modifications (keep good ones + fix bad ones + add new ones).
-4. Think as if you are telling the Reviewer: "Acknowledged. Integrating your feedback and generating Version X.Y..."`;
+4. Your response MUST start with { and end with }. No preamble, no acknowledgment text. Raw JSON only.`;
     
     userPrompt = `
 ORIGINAL RESUME:

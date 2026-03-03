@@ -205,61 +205,91 @@ const enforceLengthBudget = (original: string, newText: string): string => {
 
   if (measuredLength <= maxChars) return newText;
 
+  /**
+   * Helper: Substring the bold-included text by counting only visible characters.
+   * Returns properly closed bold markers.
+   */
+  const substringByVisible = (text: string, visibleLen: number): string => {
+    let visible = 0;
+    let pos = 0;
+    while (pos < text.length && visible < visibleLen) {
+      if (text[pos] === '*' && text[pos + 1] === '*') {
+        pos += 2; // skip bold marker
+        continue;
+      }
+      visible++;
+      pos++;
+    }
+    let result = text.substring(0, pos);
+    // Close any unclosed bold markers
+    const openBolds = (result.match(/\*\*/g) || []).length;
+    if (openBolds % 2 !== 0) result += '**';
+    return result;
+  };
+
   // ── Strategy 0: Compress filler to preserve the metric at the end ───────
-  // If the full text has a trailing metric (e.g. "by 35%.", "40% latency."),
-  // try removing filler words from the middle so the metric survives intact.
-  const stripped = newText.replace(/\*\*([^*]+)\*\*/g, '$1');
-  let compressed = stripped;
+  // Apply compressions to the original text WITH bold markers preserved.
+  let compressed = newText;
   for (const [pattern, replacement] of FILLER_COMPRESSIONS) {
     if (compressed.replace(/\*\*([^*]+)\*\*/g, '$1').length <= maxChars) break;
     compressed = compressed.replace(pattern, replacement);
   }
   compressed = compressed.replace(/\s{2,}/g, ' ').trim();
-  if (compressed.length <= maxChars && /[.!?%)"]$/.test(compressed)) {
+  const compressedVisible = compressed.replace(/\*\*([^*]+)\*\*/g, '$1');
+  if (compressedVisible.length <= maxChars && /[.!?%)"]$/.test(compressedVisible)) {
     return compressed;
   }
 
-  // ── Strategy 1: Find the last complete sentence (ends with period) ──────
+  // For strategies 1-3, work on visible text but map positions back to bold-included text.
+  const stripped = newText.replace(/\*\*([^*]+)\*\*/g, '$1');
   const hardCut  = stripped.substring(0, maxChars);
 
+  // ── Strategy 1: Find the last complete sentence (ends with period) ──────
   const lastPeriod = Math.max(
     hardCut.lastIndexOf('. '),
     hardCut.lastIndexOf('.\n'),
     hardCut.endsWith('.') ? hardCut.length - 1 : -1
   );
   if (lastPeriod > maxChars * 0.55) {
-    return hardCut.substring(0, lastPeriod + 1).trim();
+    return substringByVisible(newText, lastPeriod + 1).trim();
   }
 
   // ── Strategy 2: Find the last complete clause (semicolon) ───────────────
   const lastSemicolon = hardCut.lastIndexOf('; ');
   if (lastSemicolon > maxChars * 0.55) {
-    return hardCut.substring(0, lastSemicolon + 1).trim() + '.';
+    return substringByVisible(newText, lastSemicolon + 1).trim() + '.';
   }
 
   // ── Strategy 3: Cut at word boundary then clean up dangling words ───────
-  let trimmed = hardCut;
-  const lastSpace = trimmed.lastIndexOf(' ');
+  let trimmedVisible = hardCut;
+  const lastSpace = trimmedVisible.lastIndexOf(' ');
   if (lastSpace > maxChars * 0.4) {
-    trimmed = trimmed.substring(0, lastSpace).trim();
+    trimmedVisible = trimmedVisible.substring(0, lastSpace).trim();
   }
 
   // Remove dangling prepositions/conjunctions (multiple passes if stacked)
   let passes = 0;
-  while (DANGLING_WORDS.test(trimmed) && passes < 5) {
-    trimmed = trimmed.replace(DANGLING_WORDS, '').trim();
+  while (DANGLING_WORDS.test(trimmedVisible) && passes < 5) {
+    trimmedVisible = trimmedVisible.replace(DANGLING_WORDS, '').trim();
     passes++;
   }
 
   // Remove trailing comma, colon, or ampersand (incomplete clause)
-  trimmed = trimmed.replace(/[,;:&]\s*$/, '').trim();
+  trimmedVisible = trimmedVisible.replace(/[,;:&]\s*$/, '').trim();
+
+  // Rebuild with bold markers preserved up to trimmedVisible length
+  let result = substringByVisible(newText, trimmedVisible.length).trim();
+
+  // Clean trailing punctuation on the bold-included result
+  result = result.replace(/[,;:&]\s*$/, '').trim();
 
   // Ensure the text ends with proper punctuation
-  if (trimmed && !/[.!?%)"]$/.test(trimmed)) {
-    trimmed += '.';
+  const resultVisible = result.replace(/\*\*([^*]+)\*\*/g, '$1');
+  if (resultVisible && !/[.!?%)"]$/.test(resultVisible)) {
+    result += '.';
   }
 
-  return trimmed;
+  return result;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
