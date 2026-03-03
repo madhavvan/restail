@@ -155,27 +155,102 @@ const cleanNewContent = (text: string): string => {
 /**
  * Soft-cap new_content to the original paragraph length + small tolerance.
  *
- * We allow a little breathing room (+5 chars) so the AI can make genuine
- * improvements without being hard-cut. The GLOBAL enforcer in App.tsx
- * handles any net overflow at the document level.
+ * Budget stays TIGHT (+5 chars) to preserve the exact line structure of the
+ * resume — every bullet must occupy the same number of lines as the original.
+ * The GLOBAL enforcer in App.tsx handles overall page budget too.
+ *
+ * When trimming IS required, we trim INTELLIGENTLY instead of chopping at
+ * a dumb word boundary:
+ *   0. (NEW) Try to COMPRESS the full text by removing filler words — this
+ *      preserves the trailing metric (e.g. "by 35%") that matters most.
+ *   1. Try to find the last complete sentence (period).
+ *   2. Try to find the last complete clause (semicolon).
+ *   3. Cut at word boundary, then strip dangling prepositions/conjunctions
+ *      ("by", "via", "with", "and", etc.) that make no sense alone.
+ *   4. Strip trailing commas/colons (incomplete lists).
+ *   5. Always ensure proper punctuation at the end.
  *
  * **bold** markers are stripped before measuring — they add no page space.
  */
+const DANGLING_WORDS = /\s+(by|via|with|and|or|for|to|in|of|the|a|an|as|at|on|into|from|using|through|across|than|&)\s*$/i;
+
+/** Common filler phrases that can be compressed without losing meaning. */
+const FILLER_COMPRESSIONS: [RegExp, string][] = [
+  [/\bin order to\b/gi,       'to'],
+  [/\butilized\b/gi,          'used'],
+  [/\bimplemented\b/gi,       'built'],
+  [/\bconfigurations\b/gi,    'configs'],
+  [/\binfrastructure\b/gi,    'infra'],
+  [/\bapproximately\b/gi,     '~'],
+  [/\benvironment\b/gi,       'env'],
+  [/\bdepartments\b/gi,       'depts'],
+  [/\bapplication\b/gi,       'app'],
+  [/\boptimization\b/gi,      'optimization'],  // no-op placeholder
+  [/\band\b/gi,               '&'],
+  [/\s{2,}/g,                 ' '],             // collapse double spaces
+];
+
 const enforceLengthBudget = (original: string, newText: string): string => {
   const measuredLength = newText.replace(/\*\*([^*]+)\*\*/g, '$1').length;
-  const maxChars = original.length + 5; // small tolerance only
+  const maxChars = original.length + 5; // tight — preserves exact line count
 
   if (measuredLength <= maxChars) return newText;
 
-  // Must trim — strip bold markers first
+  // ── Strategy 0: Compress filler to preserve the metric at the end ───────
+  // If the full text has a trailing metric (e.g. "by 35%.", "40% latency."),
+  // try removing filler words from the middle so the metric survives intact.
   const stripped = newText.replace(/\*\*([^*]+)\*\*/g, '$1');
-  const trimmed  = stripped.substring(0, maxChars);
+  let compressed = stripped;
+  for (const [pattern, replacement] of FILLER_COMPRESSIONS) {
+    if (compressed.replace(/\*\*([^*]+)\*\*/g, '$1').length <= maxChars) break;
+    compressed = compressed.replace(pattern, replacement);
+  }
+  compressed = compressed.replace(/\s{2,}/g, ' ').trim();
+  if (compressed.length <= maxChars && /[.!?%)"]$/.test(compressed)) {
+    return compressed;
+  }
 
-  const lastPeriod = Math.max(trimmed.lastIndexOf('. '), trimmed.lastIndexOf('.\n'));
-  if (lastPeriod > maxChars * 0.7) return trimmed.substring(0, lastPeriod + 1).trim();
+  // ── Strategy 1: Find the last complete sentence (ends with period) ──────
+  const hardCut  = stripped.substring(0, maxChars);
 
+  const lastPeriod = Math.max(
+    hardCut.lastIndexOf('. '),
+    hardCut.lastIndexOf('.\n'),
+    hardCut.endsWith('.') ? hardCut.length - 1 : -1
+  );
+  if (lastPeriod > maxChars * 0.55) {
+    return hardCut.substring(0, lastPeriod + 1).trim();
+  }
+
+  // ── Strategy 2: Find the last complete clause (semicolon) ───────────────
+  const lastSemicolon = hardCut.lastIndexOf('; ');
+  if (lastSemicolon > maxChars * 0.55) {
+    return hardCut.substring(0, lastSemicolon + 1).trim() + '.';
+  }
+
+  // ── Strategy 3: Cut at word boundary then clean up dangling words ───────
+  let trimmed = hardCut;
   const lastSpace = trimmed.lastIndexOf(' ');
-  return lastSpace > maxChars * 0.7 ? trimmed.substring(0, lastSpace).trim() : trimmed.trim();
+  if (lastSpace > maxChars * 0.4) {
+    trimmed = trimmed.substring(0, lastSpace).trim();
+  }
+
+  // Remove dangling prepositions/conjunctions (multiple passes if stacked)
+  let passes = 0;
+  while (DANGLING_WORDS.test(trimmed) && passes < 5) {
+    trimmed = trimmed.replace(DANGLING_WORDS, '').trim();
+    passes++;
+  }
+
+  // Remove trailing comma, colon, or ampersand (incomplete clause)
+  trimmed = trimmed.replace(/[,;:&]\s*$/, '').trim();
+
+  // Ensure the text ends with proper punctuation
+  if (trimmed && !/[.!?%)"]$/.test(trimmed)) {
+    trimmed += '.';
+  }
+
+  return trimmed;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -189,46 +264,72 @@ const XML_NS = 'http://www.w3.org/XML/1998/namespace';
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Returns true if the paragraph is a protected contact/social line.
+ * Returns true if the paragraph is a PURELY protected contact/social line
+ * and should NOT be modified at all.
  *
- * Protected if the paragraph's FIRST visual line (before any <w:br>) contains:
- *   • An email address (@)
- *   • A phone number pattern
- *   • "linkedin" or "github" text (display text of hyperlinks)
- *   • Any <w:hyperlink> element (the actual XML wrapper for clickable links)
+ * KEY FIX: Many resumes place the professional title and the contact info
+ * in the SAME Word paragraph, separated by a <w:br/> (soft line break):
  *
- * The hyperlink check is the key addition — the social links line stores
- * LinkedIn and GitHub as <w:hyperlink r:id="rId..."> elements in the XML.
- * Plain text detection alone misses paragraphs where "LinkedIn" is only
- * embedded inside a hyperlink element and not visible as raw text content
- * at the paragraph level.
+ *   <w:r><w:t>Senior Software Engineer | AI Architect</w:t></w:r>
+ *   <w:r><w:br/></w:r>
+ *   <w:hyperlink r:id="rId8"><w:r><w:t>email@example.com</w:t></w:r></w:hyperlink>
+ *   <w:r><w:t> | +1 (317) 555-0123 | </w:t></w:r>
+ *   <w:hyperlink r:id="rId9"><w:r><w:t>LinkedIn</w:t></w:r></w:hyperlink>
+ *   ...
+ *
+ * The old code returned true whenever ANY <w:hyperlink> existed in the paragraph.
+ * This blocked ALL modifications — including the title, which IS supposed to change.
+ *
+ * New logic:
+ *   1. Collect the "primary" text — everything BEFORE the first <w:br/>.
+ *   2. If the primary text contains contact patterns (@ / phone / linkedin / github),
+ *      the paragraph is a pure contact line → return true.
+ *   3. If there IS a <w:br/> and the primary text does NOT look like contact info,
+ *      this is a mixed title+contact paragraph → return false. The title is editable
+ *      and applyReplacement() preserves the contact section after the break.
+ *   4. If there is no <w:br/>, check for hyperlinks — a standalone paragraph with
+ *      only hyperlinks (e.g. a solo contact line) is protected.
  */
 const isContactLine = (paragraph: Element): boolean => {
-  // ── Check 1: paragraph contains any <w:hyperlink> element ────────────────
-  // The social links line (email | LinkedIn | GitHub) uses Word hyperlinks.
-  // Any paragraph with a hyperlink is considered protected — resume content
-  // never has clickable links, only the contact section does.
-  const R_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-  if (paragraph.getElementsByTagNameNS(R_NS, 'hyperlink').length > 0) return true;
+  // Collect ONLY direct-child <w:r> elements (not nested inside hyperlinks)
+  const directRuns: Element[] = [];
+  for (let i = 0; i < paragraph.childNodes.length; i++) {
+    const child = paragraph.childNodes[i] as Element;
+    if (child.localName === 'r') directRuns.push(child);
+  }
 
-  // ── Check 2: primary text (before first <w:br>) looks like contact info ──
-  const runs = Array.from(paragraph.getElementsByTagNameNS(W_NS, 'r'));
   let primaryText = '';
+  let hasBreak = false;
 
-  for (const run of runs) {
-    const el = run as Element;
-    primaryText += el.getElementsByTagNameNS(W_NS, 't')[0]?.textContent || '';
-    if (el.getElementsByTagNameNS(W_NS, 'br').length > 0) break;
+  for (const run of directRuns) {
+    // Collect this run's text
+    primaryText += run.getElementsByTagNameNS(W_NS, 't')[0]?.textContent || '';
+    // Check for soft break
+    if (run.getElementsByTagNameNS(W_NS, 'br').length > 0) {
+      hasBreak = true;
+      break;
+    }
   }
 
   primaryText = primaryText.trim();
-  if (!primaryText) return false;
 
-  return (
+  // If the primary text (before break) itself looks like contact info → fully protected
+  if (primaryText && (
     primaryText.includes('@') ||
     /\d{3}[-.\s]\d{3,}/.test(primaryText) ||
     /linkedin|github/i.test(primaryText)
-  );
+  )) {
+    return true;
+  }
+
+  // If there's a break, this is a MIXED title+contact paragraph.
+  // The title part IS modifiable — applyReplacement() preserves the contact section.
+  if (hasBreak) return false;
+
+  // No break — standalone paragraph. If it contains hyperlinks it's a pure contact line.
+  if (paragraph.getElementsByTagNameNS(W_NS, 'hyperlink').length > 0) return true;
+
+  return false;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -406,14 +507,18 @@ const getParagraphText = (
  *
  * PARTIAL MATCH — original_excerpt is a substring of the paragraph text:
  *   Writes [before] [new content] [after] on the same line.
- *   Fixes skills-line partial replacements where trailing items were pushed
- *   to a new line.
  *
  * FULL MATCH — original_excerpt covers the whole paragraph:
  *   Replaces all content runs with new content.
  *
  * Contact runs (email | phone | LinkedIn | GitHub) that share the paragraph
  * with the title via a <w:br> are always re-attached unchanged at the end.
+ *
+ * KEY FIX: The contact section can contain <w:hyperlink> elements (for email,
+ * LinkedIn, GitHub) which are DIRECT children of <w:p>, not <w:r> elements.
+ * The old code only tracked runs, leaving orphaned hyperlinks in the wrong
+ * position after replacement. Now we save/restore ALL direct children
+ * (both runs and hyperlinks) in the contact section.
  */
 const applyReplacement = (
   paragraph: Element,
@@ -424,33 +529,74 @@ const applyReplacement = (
   const budgeted  = enforceLengthBudget(originalText, newText);
   const finalText = cleanNewContent(budgeted);
 
-  const allRuns = Array.from(paragraph.getElementsByTagNameNS(W_NS, 'r'));
-  const { text: fullParaText, contactStartIdx } = getParagraphText(paragraph);
+  // ── Gather ALL direct children that are content (runs OR hyperlinks) ─────
+  // We skip <w:pPr> (paragraph properties) and other non-content elements.
+  const allContentChildren: Element[] = [];
+  for (let i = 0; i < paragraph.childNodes.length; i++) {
+    const child = paragraph.childNodes[i] as Element;
+    if (child.localName === 'r' || child.localName === 'hyperlink') {
+      allContentChildren.push(child);
+    }
+  }
 
-  // Save the contact section (the break-containing run + all runs after it)
-  const contactRuns: Element[] = contactStartIdx >= 0
-    ? allRuns.slice(contactStartIdx).map(r => (r as Element).cloneNode(true) as Element)
-    : [];
+  // Also get only DIRECT <w:r> children (not nested inside hyperlinks) for
+  // text analysis — getParagraphText walks getElementsByTagNameNS which
+  // includes nested runs, but we need direct children for the split point.
+  const directRuns: Element[] = [];
+  for (let i = 0; i < paragraph.childNodes.length; i++) {
+    const child = paragraph.childNodes[i] as Element;
+    if (child.localName === 'r') directRuns.push(child);
+  }
 
-  // Determine which runs are content (everything before the contact section)
-  const contentRuns = contactStartIdx >= 0
-    ? allRuns.slice(0, contactStartIdx)
-    : allRuns;
+  // ── Find the break-point: the <w:r> containing <w:br/> ──────────────────
+  let breakRunElement: Element | null = null;
+  let titleTextForBudget = '';
 
-  // Capture base rPr and boldness from the first content run
+  for (const run of directRuns) {
+    titleTextForBudget += run.getElementsByTagNameNS(W_NS, 't')[0]?.textContent || '';
+    if (run.getElementsByTagNameNS(W_NS, 'br').length > 0) {
+      breakRunElement = run;
+      break;
+    }
+  }
+
+  // ── Split children into title vs contact sections ────────────────────────
+  let titleChildren: Element[] = [];
+  let contactChildren: Element[] = [];
+
+  if (breakRunElement) {
+    const breakIdx = allContentChildren.indexOf(breakRunElement);
+    if (breakIdx >= 0) {
+      // Title = everything before the break run (exclusive)
+      titleChildren   = allContentChildren.slice(0, breakIdx);
+      // Contact = the break run + everything after it (hyperlinks, runs, etc.)
+      contactChildren = allContentChildren.slice(breakIdx);
+    } else {
+      // Break run is a direct <w:r> but not in our content list (shouldn't happen)
+      titleChildren = allContentChildren;
+    }
+  } else {
+    // No break — entire paragraph is one section
+    titleChildren = allContentChildren;
+  }
+
+  // ── Capture base formatting from the first title run ─────────────────────
   let baseRPr: Node | null = null;
   let originalIsBold = false;
 
-  if (contentRuns.length > 0) {
-    const rPr0 = (contentRuns[0] as Element).getElementsByTagNameNS(W_NS, 'rPr')[0];
+  const firstTitleRun = titleChildren.find(c => c.localName === 'r') as Element | undefined;
+  if (firstTitleRun) {
+    const rPr0 = firstTitleRun.getElementsByTagNameNS(W_NS, 'rPr')[0];
     if (rPr0) baseRPr = rPr0.cloneNode(true);
 
+    // Check if majority of title content is bold
     let boldLen = 0;
     let totalLen = 0;
-    contentRuns.forEach(run => {
-      const t   = (run as Element).getElementsByTagNameNS(W_NS, 't')[0]?.textContent || '';
+    titleChildren.forEach(child => {
+      if (child.localName !== 'r') return;
+      const t   = child.getElementsByTagNameNS(W_NS, 't')[0]?.textContent || '';
       totalLen += t.length;
-      const rPr = (run as Element).getElementsByTagNameNS(W_NS, 'rPr')[0];
+      const rPr = child.getElementsByTagNameNS(W_NS, 'rPr')[0];
       if (rPr && (
         rPr.getElementsByTagNameNS(W_NS, 'b').length > 0 ||
         rPr.getElementsByTagNameNS(W_NS, 'bCs').length > 0
@@ -461,17 +607,24 @@ const applyReplacement = (
     if (totalLen > 0 && boldLen / totalLen > 0.5) originalIsBold = true;
   }
 
-  // Remove all old runs
-  allRuns.forEach(run => run.parentNode?.removeChild(run));
+  // ── Deep-clone the contact section BEFORE removing anything ──────────────
+  const savedContactNodes: Node[] = contactChildren.map(el => el.cloneNode(true));
 
-  // ── Partial vs Full match ────────────────────────────────────────────────
-  const normFull = normalizeForMatch(fullParaText);
-  const normOrig = normalizeForMatch(originalText);
+  // ── Remove ALL content children (title + contact) from the paragraph ─────
+  allContentChildren.forEach(child => {
+    if (child.parentNode) child.parentNode.removeChild(child);
+  });
+
+  // ── Determine full-match vs partial-match ────────────────────────────────
+  // Use the title-only text (before break) for matching, not the full paragraph
+  const titleText = titleTextForBudget.replace(/\n/g, '').trim();
+  const normTitle = normalizeForMatch(titleText);
+  const normOrig  = normalizeForMatch(originalText);
 
   const isPartial =
-    normFull.includes(normOrig) &&
-    normFull.trim() !== normOrig.trim() &&
-    normOrig.length < normFull.length * 0.95;
+    normTitle.includes(normOrig) &&
+    normTitle.trim() !== normOrig.trim() &&
+    normOrig.length < normTitle.length * 0.95;
 
   const writeFinalText = (textToWrite: string, inheritBold: boolean): void => {
     textToWrite.split('\n').forEach((line, lineIdx) => {
@@ -485,14 +638,14 @@ const applyReplacement = (
   };
 
   if (isPartial) {
-    let matchStart = fullParaText.indexOf(originalText);
+    let matchStart = titleText.indexOf(originalText);
     if (matchStart === -1) {
-      matchStart = fullParaText.toLowerCase().indexOf(originalText.toLowerCase());
+      matchStart = titleText.toLowerCase().indexOf(originalText.toLowerCase());
     }
 
     if (matchStart !== -1) {
-      const before = fullParaText.substring(0, matchStart);
-      const after  = fullParaText.substring(matchStart + originalText.length);
+      const before = titleText.substring(0, matchStart);
+      const after  = titleText.substring(matchStart + originalText.length);
 
       if (before) writeRun(xmlDoc, paragraph, before, baseRPr, originalIsBold);
       writeFinalText(finalText, false);
@@ -504,9 +657,9 @@ const applyReplacement = (
     writeFinalText(finalText, originalIsBold);
   }
 
-  // Re-attach the contact section (email | phone | LinkedIn | GitHub)
-  if (contactRuns.length > 0) {
-    contactRuns.forEach(run => paragraph.appendChild(run));
+  // ── Re-attach the contact section (break + hyperlinks + runs) ────────────
+  for (const node of savedContactNodes) {
+    paragraph.appendChild(node);
   }
 };
 

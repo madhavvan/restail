@@ -52,7 +52,7 @@ export const tailorResumeGemini = async (
 
   // ====================== DYNAMIC PAGE-LIMIT BUDGET (NEW) ======================
   const originalCharCount = resumeText.length;
-  const maxAllowedChars = Math.floor(originalCharCount * 0.97); // strict 3% buffer
+  const maxAllowedChars = Math.floor(originalCharCount * 1.00); // budget allows complete sentences
 
   let systemInstruction = `
 You are Gemini 3.1 Pro - Elite Executive Resume Writer and Formatting Expert.
@@ -117,7 +117,7 @@ You are formatting for a real Microsoft Word document:
 - Font: Calibri 11pt
 - Margins: 0.75"
 - Line spacing: 1.0–1.15
-- Maximum content lines allowed: 64–68 lines total (after header)
+- Maximum content lines allowed: 66–70 lines total (after header)
 
 **Global Budget (CRITICAL)**:
 - Original resume character count (body): ${originalCharCount}
@@ -159,6 +159,28 @@ IMPORTANT RULES FOR MODIFICATIONS:
 4. PRESERVE DATES: NEVER modify, hallucinate, or change any dates, tenures, or chronological information.
 5. PRESERVE LINE BREAKS: If the original text has a line break (e.g., Title on line 1, Email on line 2), you MUST include the exact same line breaks (\\n) in your \`new_content\`.
 6. CONTACT LINE IS LOCKED: NEVER include email, phone, LinkedIn, or GitHub in any new_content. The contact line (Line 3 of the header) must never be modified or duplicated.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 METRIC WRITING DISCIPLINE (CRITICAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Every bullet must include a quantified metric AND fit within ±5 chars of the original.
+The metric MUST survive inside the budget — it must NEVER be the part that gets cut.
+
+TECHNIQUE: Write TIGHT. Trim filler, not the metric.
+
+BAD (verbose — metric at risk of being cut):
+  "Optimized cloud runtime configurations with Kubernetes and Docker, increasing deployment efficiency by 35% through automated scaling." (133 chars)
+
+GOOD (tight — metric is embedded safely within budget):
+  "Optimized cloud runtime configs via Kubernetes & Docker, boosting deploy efficiency 35%." (89 chars)
+
+RULES:
+• Use "&" instead of "and" to save 2 chars.
+• Use short forms: "configs" not "configurations", "infra" not "infrastructure", "dept" not "departments".
+• Drop filler: "in order to" → "to", "utilized" → "used", "implemented a solution that" → "built".
+• Front-load or embed the metric: "cut latency 40%" not "reducing the overall latency by approximately 40%".
+• The metric (e.g. "35%", "3M+ records", "$2M savings") is the MOST IMPORTANT part — protect it.
+• Count your characters BEFORE outputting. If over budget, cut adjectives and filler, NEVER the metric.
 `;
 
   let userPrompt = "";

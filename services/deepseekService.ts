@@ -4,7 +4,8 @@ import { TailoredResumeData } from "../types";
 export const createOptimizationPlanDeepSeek = async (
   resumeText: string,
   jobDescription: string,
-  apiKey: string
+  apiKey: string,
+  writerModelName?: string
 ): Promise<string> => {
   if (!apiKey) throw new Error("DeepSeek API Key missing.");
 
@@ -14,6 +15,8 @@ export const createOptimizationPlanDeepSeek = async (
     dangerouslyAllowBrowser: true 
   });
 
+  const partnerName = writerModelName || 'GPT-5.2';
+
   const response = await deepseek.chat.completions.create({
     model: "deepseek-chat",
     temperature: 0.7,
@@ -21,16 +24,17 @@ export const createOptimizationPlanDeepSeek = async (
     messages: [
       { 
         role: "system", 
-        content: `You are DeepSeek-V3.2, the Critical Reviewer working with GPT-5.2.
+        content: `You are DeepSeek-V3.2, the Critical Reviewer working with ${partnerName}.
 You are an Elite Resume Copywriter and ATS Strategist with 30+ years of top-tier experience in IT systems, AI, and Data Engineering.
 Your goal is to rewrite the provided resume to perfectly match the Job Description with absolute authority and "mouth-shutting" impact.
 The points you write must be breathtakingly powerful, demonstrating unparalleled expertise and leadership.
+${partnerName === 'Claude Opus 4.6' ? '\nYou are working with Claude Opus 4.6 — the most analytically precise reasoning model available. Match its depth of analysis. Challenge its reasoning with equally rigorous counter-arguments. Demand mathematical precision in keyword density and character budgets. Your feedback must be at the highest intellectual caliber.' : ''}
 
-Speak naturally and directly to GPT-5.2.
+Speak naturally and directly to ${partnerName}.
 
 Start your response EXACTLY like this:
 
-"GPT-5.2, I have carefully reviewed your proposed optimization plan along with the full resume and Job Description.
+"${partnerName}, I have carefully reviewed your proposed optimization plan along with the full resume and Job Description.
 
 REVIEW FEEDBACK:
 
@@ -68,11 +72,11 @@ export const tailorResumeDeepSeek = async (
 
   // ====================== DYNAMIC PAGE-LIMIT BUDGET (NEW) ======================
   const originalCharCount = resumeText.length;
-  const maxAllowedChars = Math.floor(originalCharCount * 0.97); // strict 3% buffer
+  const maxAllowedChars = Math.floor(originalCharCount * 1.00); // budget allows complete sentences
 
   let systemPrompt = `
 You are DeepSeek-V3.2 - Critical ATS Auditor, Elite Executive Resume Writer, and Formatting Expert with 30+ years of top-tier experience in IT systems, AI, and Data Engineering.
-You are reviewing work from GPT-5.2.
+You are reviewing work from the Primary Writer.
 
 Your objective is to parse the user's provided resume, dramatically enhance the impact of the content, and **STRICTLY** fit the final output within a designated 2-page limit without using formatting tricks or artificial spacing.
 
@@ -128,7 +132,7 @@ You are formatting for a real Microsoft Word document:
 - Font: Calibri 11pt
 - Margins: 0.75"
 - Line spacing: 1.0–1.15
-- Maximum content lines allowed: 64–68 lines total (after header)
+- Maximum content lines allowed: 66–70 lines total (after header)
 
 **Global Budget (CRITICAL)**:
 - Original resume character count (body): ${originalCharCount}
@@ -170,6 +174,28 @@ IMPORTANT RULES FOR MODIFICATIONS:
 4. PRESERVE DATES: NEVER modify, hallucinate, or change any dates, tenures, or chronological information.
 5. PRESERVE LINE BREAKS: If the original text has a line break (e.g., Title on line 1, Email on line 2), you MUST include the exact same line breaks (\\n) in your \`new_content\`.
 6. CONTACT LINE IS LOCKED: NEVER include email, phone, LinkedIn, or GitHub in any new_content. The contact line (Line 3 of the header) must never be modified or duplicated.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 METRIC WRITING DISCIPLINE (CRITICAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Every bullet must include a quantified metric AND fit within ±5 chars of the original.
+The metric MUST survive inside the budget — it must NEVER be the part that gets cut.
+
+TECHNIQUE: Write TIGHT. Trim filler, not the metric.
+
+BAD (verbose — metric at risk of being cut):
+  "Optimized cloud runtime configurations with Kubernetes and Docker, increasing deployment efficiency by 35% through automated scaling." (133 chars)
+
+GOOD (tight — metric is embedded safely within budget):
+  "Optimized cloud runtime configs via Kubernetes & Docker, boosting deploy efficiency 35%." (89 chars)
+
+RULES:
+• Use "&" instead of "and" to save 2 chars.
+• Use short forms: "configs" not "configurations", "infra" not "infrastructure", "dept" not "departments".
+• Drop filler: "in order to" → "to", "utilized" → "used", "implemented a solution that" → "built".
+• Front-load or embed the metric: "cut latency 40%" not "reducing the overall latency by approximately 40%".
+• The metric (e.g. "35%", "3M+ records", "$2M savings") is the MOST IMPORTANT part — protect it.
+• Count your characters BEFORE outputting. If over budget, cut adjectives and filler, NEVER the metric.
 `;
 
   let userPrompt = "";
@@ -203,7 +229,7 @@ Return updated JSON now.`;
   const response = await deepseek.chat.completions.create({
     model: "deepseek-chat",
     temperature: 0.65,
-    max_tokens: 8000,
+    max_tokens: 28000,
     messages: [
       { role: "system", content: systemPrompt.trim() },
       { role: "user", content: userPrompt.trim() }

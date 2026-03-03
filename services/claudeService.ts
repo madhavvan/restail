@@ -1,47 +1,82 @@
-import OpenAI from "openai";
 import { TailoredResumeData } from "../types";
 
-export const createOptimizationPlan = async (
+const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+const CLAUDE_MODEL = "claude-opus-4-6";
+
+async function callClaude(
+  apiKey: string,
+  system: string,
+  userContent: string,
+  temperature: number = 0.7,
+  maxTokens: number = 28000
+): Promise<string> {
+  const response = await fetch(ANTHROPIC_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: maxTokens,
+      temperature,
+      system,
+      messages: [{ role: "user", content: userContent }],
+    }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => "");
+    const status = response.status;
+    if (status === 429) {
+      const err: any = new Error(`Rate limit exceeded. ${errBody}`);
+      err.status = 429;
+      throw err;
+    }
+    throw new Error(`Claude API error (${status}): ${errBody || response.statusText}`);
+  }
+
+  const data = await response.json();
+  const textBlock = data.content?.find((b: any) => b.type === "text");
+  return textBlock?.text || "";
+}
+
+export const createOptimizationPlanClaude = async (
   resumeText: string,
   jobDescription: string,
   apiKey: string
 ): Promise<string> => {
-  if (!apiKey) throw new Error("OpenAI API Key missing.");
+  if (!apiKey) throw new Error("Claude API Key missing.");
 
-  const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
+  const system = `You are Claude Opus 4.6, the Primary Optimizer collaborating with the Critical ATS Auditor.
+You are an Elite Resume Copywriter and ATS Strategist with 40+ years of experience in IT systems, AI, and Data Engineering.
+Your analytical depth and reasoning precision are unmatched — you decompose every bullet for maximum keyword density and impact.
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-5.2",
-    temperature: 0.7,
-    messages: [
-      {
-        role: "system",
-        content: `You are GPT-5.2, the Primary Optimizer collaborating with DeepSeek-V3.2.
-You are an Elite Resume Copywriter and ATS Strategist with 30+ years of experience in IT systems, AI, and Data Engineering.
-
-Speak naturally and directly to DeepSeek-V3.2.
+Speak naturally and directly to your auditor partner.
 
 Start your response EXACTLY like this:
 
-"DeepSeek-V3.2, I have carefully reviewed the resume and Job Description.
+"I have carefully reviewed the resume and Job Description with deep analytical precision.
 
 PROPOSED OPTIMIZATION PLAN:
 
 [your detailed bullets here]
 
-Please review this plan and provide your critical feedback."`
-      },
-      {
-        role: "user",
-        content: `RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}`
-      }
-    ]
-  });
+Please review this plan and provide your critical feedback."`;
 
-  return response.choices[0].message.content || "Failed to generate plan.";
+  const result = await callClaude(
+    apiKey,
+    system,
+    `RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}`,
+    0.7
+  );
+
+  return result || "Failed to generate plan.";
 };
 
-export const tailorResumeOpenAI = async (
+export const tailorResumeClaude = async (
   resumeText: string,
   jobDescription: string,
   apiKey: string,
@@ -51,29 +86,30 @@ export const tailorResumeOpenAI = async (
     currentScore: number;
   }
 ): Promise<TailoredResumeData> => {
-  if (!apiKey) throw new Error("OpenAI API Key missing.");
-
-  const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
+  if (!apiKey) throw new Error("Claude API Key missing.");
 
   // ── Compute per-paragraph character budgets from the original resume ──────
   const originalLines = resumeText.split('\n');
   const originalCharCount = resumeText.length;
   const maxAllowedChars = Math.floor(originalCharCount * 1.00);
 
-  // Build a budget map: each line → max chars allowed for its replacement
   const paragraphBudgets = originalLines
     .filter(l => l.trim().length > 8)
     .map(l => `  "${l.trim().substring(0, 60)}…" → max ${Math.ceil(l.trim().length * 1.10)} chars`)
-    .slice(0, 40) // cap to avoid token overflow
+    .slice(0, 40)
     .join('\n');
 
   const systemPrompt = `
-You are GPT-5.2 — Elite Executive Resume Writer and ATS Strategist.
-You are collaborating live with DeepSeek-V3.2 (Critical ATS Auditor).
+You are Claude Opus 4.6 — the most analytically precise and deeply reasoning Elite Executive Resume Writer and ATS Strategist.
+You are collaborating live with a Critical ATS Auditor.
 
 Your job is to rewrite ONLY the text content of specific bullet points and sections
 to better match the Job Description. You are NOT redesigning the resume.
 The document already has perfect Word formatting — your job is to improve the WORDS ONLY.
+
+Your unique strength: deep chain-of-thought reasoning to find the PERFECT phrasing that
+maximizes ATS keyword density while maintaining natural, impactful prose. You reason through
+each bullet methodically before committing to the final wording.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📌 RESUME HEADER ANATOMY — READ CAREFULLY
@@ -103,8 +139,8 @@ CRITICAL RULES FOR TITLE MODIFICATION:
 2. NEVER use markdown heading markers (#, ##) or leading bullet symbols (•, -, *) at start of lines.
 3. NEVER add bullet symbols (•, -, *) — the document already has them in its formatting.
 4. LENGTH IS SACRED — new_content MUST be within ±5 characters of original_excerpt.
-   If original is 80 chars → new_content must be 75–85 chars. This preserves page layout exactly.
-   If you cannot fit a rewrite in that budget, trim words rather than exceed the limit.
+   If original is 80 chars → new_content must be 80–85 chars. This preserves page layout exactly.
+   If you cannot fit a rewrite in that budget, trim words rather than exceed the limit but complete the sentence.
    Note: **bold** markers do NOT count toward the character budget.
 5. NEVER combine multiple bullet points into one new_content. One excerpt → one replacement.
 6. NEVER modify dates, company names, job titles, or contact information.
@@ -115,11 +151,12 @@ CRITICAL RULES FOR TITLE MODIFICATION:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Original resume total characters: ${originalCharCount}
 Your MAXIMUM total characters across ALL new_content fields combined: ${maxAllowedChars}
+Maximum content lines allowed: 66–70 lines total (after header)
 
 PER-PARAGRAPH BUDGETS (your replacement cannot exceed these):
 ${paragraphBudgets}
 
-If you are over budget: shorten by removing filler words, merging redundant phrases,
+If you are over budget: shorten by removing filler words but complete the sentence formation, merging redundant phrases,
 or cutting the weakest bullet. NEVER add content that didn't exist before.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -146,7 +183,7 @@ When rewriting the professional title, new_content = title text only, same lengt
 Every bullet must include a quantified metric AND fit within ±5 chars of the original.
 The metric MUST survive inside the budget — it must NEVER be the part that gets cut.
 
-TECHNIQUE: Write TIGHT. Trim filler, not the metric.
+TECHNIQUE: Write TIGHT. Trim filler with complete sentence formation, not the metric.
 
 BAD (verbose — metric at risk of being cut):
   "Optimized cloud runtime configurations with Kubernetes and Docker, increasing deployment efficiency by 35% through automated scaling." (133 chars)
@@ -166,7 +203,7 @@ RULES:
 OUTPUT FORMAT — valid JSON only, no other text
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {
-  "agents": { "primary": "GPT-5.2", "auditor": "DeepSeek-V3.2" },
+  "agents": { "primary": "Claude Opus 4.6", "auditor": "ATS Auditor" },
   "ats": {
     "score": 95,
     "feedback": "Specific feedback on this version...",
@@ -186,6 +223,8 @@ RULES FOR original_excerpt:
 - Must be a single continuous paragraph or bullet — never combine two paragraphs
 - Must be at least 10 characters long
 - Case-sensitive, spacing preserved
+
+IMPORTANT: Return ONLY the raw JSON object. No markdown fences, no backticks, no preamble text. Just the JSON.
 `.trim();
 
   let userPrompt = "";
@@ -207,18 +246,8 @@ INSTRUCTIONS FOR THIS REVISION:
     userPrompt = `ORIGINAL RESUME:\n${resumeText}\n\n${feedbackSection}\n\nPREVIOUS MODIFICATIONS:\n${JSON.stringify(critiqueContext.previousModifications, null, 2)}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nReturn updated JSON now.`;
   }
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-5.2",
-    temperature: 0.65,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user",   content: userPrompt.trim() }
-    ],
-    response_format: { type: "json_object" }
-  });
-
-  const content = response.choices[0].message.content;
-  if (!content) throw new Error("No response from OpenAI");
+  const content = await callClaude(apiKey, systemPrompt, userPrompt.trim(), 0.65);
+  if (!content) throw new Error("No response from Claude");
 
   try {
     const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -227,6 +256,6 @@ INSTRUCTIONS FOR THIS REVISION:
     return data;
   } catch (e) {
     console.error("JSON parse error:", e);
-    throw new Error("Failed to parse OpenAI response.");
+    throw new Error("Failed to parse Claude response.");
   }
 };
