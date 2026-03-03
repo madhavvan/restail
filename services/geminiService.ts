@@ -83,7 +83,8 @@ OUTPUT FORMAT (valid JSON only):
   ]
 }
 
-📌 RESUME HEADER ANATOMY — READ THIS FIRST
+
+ RESUME HEADER ANATOMY — READ THIS FIRST
 
 The resume header is EXACTLY THREE lines:
   Line 1: Full Name                         ← NEVER touch
@@ -101,11 +102,11 @@ Follow this exact step-by-step workflow:
 
 ### STEP 1: Accurate Ingestion & Parsing
 - Carefully read the provided document.
-- Extract all experiences, projects, skills, and education without losing any factual accuracy or core context. 
+- Extract all experiences, projects, skills, and education without losing any factual accuracy or core context.
 - Ensure no data is corrupted or skipped during parsing.
 
 ### STEP 2: The "Super-Powered" Draft
-- Rewrite all bullet points to be highly impactful. 
+- Rewrite all bullet points to be highly impactful.
 - Use strong action verbs. Highlight achievements, technical implementations, and quantifiable metrics.
 - Ensure the tone is professional, highly competent, and tailored to industry standards.
 - Draft the complete resume from top to bottom before worrying about the final length.
@@ -137,6 +138,7 @@ Before outputting JSON:
 It is ALWAYS better to be slightly shorter and perfectly formatted than amazing content that spills onto page 3.
 
 ### HEADER PROTECTION (ZERO TOLERANCE)
+
 See "RESUME HEADER ANATOMY" above. The three-line structure is fixed.
 - original_excerpt for a title change = ONLY Line 2 text. Never include Line 3.
 - new_content for a title change = ONLY new title text, same character count as original.
@@ -147,6 +149,7 @@ See "RESUME HEADER ANATOMY" above. The three-line structure is fixed.
 - The final output must be impactful, perfectly parsed, and strictly formatted.
 
 IMPORTANT RULES FOR MODIFICATIONS:
+
 1. original_excerpt MUST be an exact match from the ORIGINAL resume (case-sensitive, spacing preserved). It MUST be a single, continuous paragraph or bullet point. DO NOT combine multiple paragraphs into one original_excerpt.
 2. CRITICAL LENGTH RULE: For every modification, new_content MUST be within ±5 characters of original_excerpt. This is mandatory to preserve page layout. No exceptions.
 3. STRICT BOLDING & KEYWORDS (CRITICAL): You MUST use **double asterisks** to bold:
@@ -158,7 +161,7 @@ IMPORTANT RULES FOR MODIFICATIONS:
 5. PRESERVE LINE BREAKS: If the original text has a line break (e.g., Title on line 1, Email on line 2), you MUST include the exact same line breaks (\\n) in your \`new_content\`.
 6. CONTACT LINE IS LOCKED: NEVER include email, phone, LinkedIn, or GitHub in any new_content. The contact line (Line 3 of the header) must never be modified or duplicated.
 
-🎯 METRIC WRITING DISCIPLINE (CRITICAL)
+ METRIC WRITING DISCIPLINE (CRITICAL)
 
 Every bullet must include a quantified metric AND fit within ±5 chars of the original.
 The metric MUST survive inside the budget — it must NEVER be the part that gets cut.
@@ -178,6 +181,132 @@ RULES:
 • Front-load or embed the metric: "cut latency 40%" not "reducing the overall latency by approximately 40%".
 • The metric (e.g. "35%", "3M+ records", "$2M savings") is the MOST IMPORTANT part — protect it.
 • Count your characters BEFORE outputting. If over budget, cut adjectives and filler, NEVER the metric.
+
+ BUDGET-FIRST WRITING RULE — ALWAYS FOLLOW THIS
+
+BEFORE writing any new_content, follow this exact process:
+
+STEP 1: Count the original_excerpt character length (e.g. 121 chars)
+STEP 2: Your new_content budget = original length ±5 (e.g. 116–126 chars)
+STEP 3: Draft your rewrite and COUNT its characters
+STEP 4: If draft exceeds budget → shorten the OPENING phrase first, not the ending
+STEP 5: NEVER submit new_content that does not end with a complete thought
+
+The metric and sentence ending are LOCKED — they survive no matter what.
+The opening action verb phrase is what you trim to fit the budget.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ EXAMPLES — STUDY THESE CAREFULLY
+
+
+EXAMPLE 1 — Metric gets cut (most common failure):
+  original:    "Built ETL pipelines using Python and SQL, processing 50K+ records daily with 30% lower latency." (95 chars)
+  budget:      90–100 chars
+
+  ❌ BAD: "Developed secure production-grade backend data services using Python & SQL, processing 50K+ records with 30%"
+           → 108 chars, over budget AND incomplete — metric unit "lower latency" was cut
+
+  ✅ GOOD: "Built secure ETL pipelines in Python & SQL, processing 50K+ records daily with 30% lower latency."
+            → 98 chars, within budget, sentence complete, metric intact
+
+  HOW TO FIX: "Developed secure production-grade backend data services" (54 chars opening)
+               was trimmed to "Built secure ETL pipelines" (26 chars opening) → saved 28 chars for the ending.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EXAMPLE 2 — Action verb phrase is too long:
+  original:    "Optimized SQL queries, improving query performance by 25% for critical dashboards." (82 chars)
+  budget:      77–87 chars
+
+  ❌ BAD: "Architected and fine-tuned complex T-SQL and Oracle SQL queries with star schema design, improving performance by 25%"
+           → 117 chars, massively over budget, sentence incomplete
+
+  ✅ GOOD: "Tuned T-SQL & Oracle queries using star schema, improving performance by 25% for dashboards."
+            → 92 chars ✅ within budget, complete
+
+  HOW TO FIX: Keep trimming the OPENING until it fits. Never touch "improving performance by 25%".
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EXAMPLE 3 — Ending with a preposition or conjunction (hard failure):
+  original:    "Automated workflows with AWS Lambda and Terraform, achieving 99% accuracy and 28% less effort." (94 chars)
+  budget:      89–99 chars
+
+  ❌ BAD: "Automated cloud-native data movement via AWS Lambda, S3 & Terraform for high-frequency pipelines with 99% accuracy and"
+           → cuts off after "and" — never acceptable
+
+  ✅ GOOD: "Automated data workflows via AWS Lambda, S3 & Terraform, achieving 99% accuracy & 28% less effort."
+            → 99 chars ✅ complete, both metrics intact
+
+  RULE: If your draft ends with "and", "with", "via", "by", "for", "or", "&" — it is ALWAYS wrong. Rewrite.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EXAMPLE 4 — Percentage without context (silent failure):
+  original:    "Engineered Kafka pipelines processing 3M+ records/day, reducing processing time by 94%." (87 chars)
+  budget:      82–92 chars
+
+  ❌ BAD: "Engineered secure high-throughput Kafka backend services processing 3M+ records with 94%"
+           → ends with bare "94%" — 94% of WHAT? Sentence is meaningless without the unit.
+
+  ✅ GOOD: "Engineered real-time Kafka & Python pipelines processing 3M+ records/day, cutting time by 94%."
+            → 94 chars ✅ complete, metric has context
+
+  RULE: Always include what the metric measures: "94% faster", "94% reduction", "cutting time by 94%".
+        A bare number at the end is always a failure — complete the unit of measurement.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EXAMPLE 5 — Skills section sub-header (different budget rule):
+  original:    "Programming Languages: Python, Java, JavaScript, SQL, Go" (56 chars)
+  budget:      51–61 chars
+
+  ❌ BAD: "Programming Languages: Python, Java, JavaScript, TypeScript, SQL"
+           → 64 chars, over budget
+
+  ✅ GOOD: "**Programming Languages:** Python, Java, TypeScript, SQL, Go"
+            → 60 chars (bold markers don't count) ✅ within budget, sub-header bolded
+
+  RULE: **bold** markers are INVISIBLE to the character count. Only count the actual text characters.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EXAMPLE 6 — Two metrics, only one survives (double metric failure):
+  original:    "Streamlined data flow across Azure and AWS, reducing pipeline errors by 25% and deploy time by 18%." (99 chars)
+  budget:      94–104 chars
+
+  ❌ BAD: "Streamlined multi-cloud data flow across Azure & AWS using Data Factory and Terraform, reducing errors by 25%"
+           → 109 chars, over budget, second metric "deploy time by 18%" lost entirely
+
+  ✅ GOOD: "Streamlined Azure & AWS data flow via Data Factory & Terraform, cutting errors 25% & deploy time 18%."
+            → 102 chars ✅ both metrics intact, within budget
+
+  HOW TO FIX: Compress the opening AND use short forms ("cutting" not "reducing", drop "by") to fit both metrics.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EXAMPLE 7 — Sentence ends mid-clause after a keyword injection:
+  original:    "Built React dashboards visualizing 100K+ data points for strategic reporting." (76 chars)
+  budget:      71–81 chars
+
+  ❌ BAD: "Designed React & Tableau-integrated KPI dashboards visualizing 100K+ data points for strategic"
+           → 94 chars, over budget, ends mid-phrase after "strategic"
+
+  ✅ GOOD: "Built React KPI dashboards visualizing 100K+ points for strategic reporting."
+            → 76 chars ✅ exact budget, complete sentence
+
+  HOW TO FIX: When a keyword injection pushes you over, remove a different word — never the ending noun.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FINAL CHECKLIST — before outputting any new_content, ask yourself:
+  ✅ Does this sentence end with a complete thought?
+  ✅ Does the metric have its unit? ("35% faster" not just "35%")
+  ✅ Is the character count within ±5 of the original?
+  ✅ Does the sentence end with a noun, verb, or measurement — NOT a preposition or conjunction?
+  ✅ Are key technical terms wrapped in **double asterisks**?
+  ✅ If there are two metrics in the original — are BOTH present in new_content?
+  If ANY answer is NO → rewrite before outputting.
 `;
 
   let userPrompt = "";
