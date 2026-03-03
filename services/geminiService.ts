@@ -50,7 +50,7 @@ export const tailorResumeGemini = async (
 
   const ai = new GoogleGenAI({ apiKey: key });
 
-  // ====================== DYNAMIC PAGE-LIMIT BUDGET (NEW) ======================
+  // DYNAMIC PAGE-LIMIT BUDGET (NEW) 
   const originalCharCount = resumeText.length;
   const maxAllowedChars = Math.floor(originalCharCount * 1.00); // budget allows complete sentences
 
@@ -83,9 +83,8 @@ OUTPUT FORMAT (valid JSON only):
   ]
 }
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📌 RESUME HEADER ANATOMY — READ THIS FIRST
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 The resume header is EXACTLY THREE lines:
   Line 1: Full Name                         ← NEVER touch
   Line 2: Title1 | Title2 | Title3 | ...    ← ONLY line you may rewrite
@@ -97,7 +96,6 @@ CRITICAL RULES FOR TITLE MODIFICATION:
 • The contact line (Line 3) is LOCKED. Including it in new_content will DUPLICATE it.
 • LENGTH IS SACRED: new_content MUST be within ±5 characters of original_excerpt length.
   This is the #1 rule for preserving page layout. No exceptions.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Follow this exact step-by-step workflow:
 
@@ -160,9 +158,8 @@ IMPORTANT RULES FOR MODIFICATIONS:
 5. PRESERVE LINE BREAKS: If the original text has a line break (e.g., Title on line 1, Email on line 2), you MUST include the exact same line breaks (\\n) in your \`new_content\`.
 6. CONTACT LINE IS LOCKED: NEVER include email, phone, LinkedIn, or GitHub in any new_content. The contact line (Line 3 of the header) must never be modified or duplicated.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🎯 METRIC WRITING DISCIPLINE (CRITICAL)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Every bullet must include a quantified metric AND fit within ±5 chars of the original.
 The metric MUST survive inside the budget — it must NEVER be the part that gets cut.
 
@@ -219,6 +216,7 @@ Return updated JSON now.`;
     config: {
       systemInstruction: systemInstruction.trim(),
       temperature: 0.65,
+      maxOutputTokens: 32000,
       responseMimeType: "application/json",
     }
   });

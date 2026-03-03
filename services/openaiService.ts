@@ -13,6 +13,7 @@ export const createOptimizationPlan = async (
   const response = await openai.chat.completions.create({
     model: "gpt-5.2",
     temperature: 0.7,
+    max_tokens: 32000,
     messages: [
       {
         role: "system",
@@ -75,9 +76,8 @@ Your job is to rewrite ONLY the text content of specific bullet points and secti
 to better match the Job Description. You are NOT redesigning the resume.
 The document already has perfect Word formatting — your job is to improve the WORDS ONLY.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 RESUME HEADER ANATOMY — READ CAREFULLY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ RESUME HEADER ANATOMY — READ CAREFULLY
+
 The resume header is EXACTLY THREE lines:
   Line 1: Full Name                        ← NEVER touch
   Line 2: Title1 | Title2 | Title3 | ...   ← ONLY line you may rewrite
@@ -92,9 +92,8 @@ CRITICAL RULES FOR TITLE MODIFICATION:
   If you include it in new_content it will be DUPLICATED — causing a broken header.
 • The character count of new_content MUST be within ±5 characters of original_excerpt.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚫 ABSOLUTE FORMATTING RULES — NEVER VIOLATE THESE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ABSOLUTE FORMATTING RULES — NEVER VIOLATE THESE
+
 1. USE **double asterisks** to bold critical content — the document engine converts them
    to native Word bold automatically. You MUST bold:
    • Skills sub-headers: **Languages:**, **Databases:**, **Frameworks:**, **Cloud Platforms:**, **Tools:** etc.
@@ -110,9 +109,8 @@ CRITICAL RULES FOR TITLE MODIFICATION:
 6. NEVER modify dates, company names, job titles, or contact information.
 7. NEVER add extra blank lines (\\n\\n) — this pushes content off the page.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📏 PAGE LIMIT ENFORCEMENT (HARD CONSTRAINT)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ PAGE LIMIT ENFORCEMENT (HARD CONSTRAINT)
+
 Original resume total characters: ${originalCharCount}
 Your MAXIMUM total characters across ALL new_content fields combined: ${maxAllowedChars}
 
@@ -122,16 +120,14 @@ ${paragraphBudgets}
 If you are over budget: shorten by removing filler words, merging redundant phrases,
 or cutting the weakest bullet. NEVER add content that didn't exist before.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 HEADER PROTECTION — ZERO TOLERANCE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ HEADER PROTECTION — ZERO TOLERANCE
+
 See "RESUME HEADER ANATOMY" above.
 NEVER include the contact line (email | phone | linkedin) in any modification.
 When rewriting the professional title, new_content = title text only, same length as original.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ WHAT YOU SHOULD DO
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ WHAT YOU SHOULD DO
+
 - Replace weak action verbs with powerful ones (Led, Architected, Delivered, etc.)
 - Inject relevant keywords from the Job Description naturally into existing bullets
 - Wrap key technical terms in **double asterisks**: "proficient in **Python**, **PySpark**, and **AWS**"
@@ -140,9 +136,8 @@ When rewriting the professional title, new_content = title text only, same lengt
 - Tighten wordiness — every word must earn its place
 - Match the JD's exact terminology for tools, frameworks, and skills
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 METRIC WRITING DISCIPLINE (CRITICAL)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ METRIC WRITING DISCIPLINE (CRITICAL)
+
 Every bullet must include a quantified metric AND fit within ±5 chars of the original.
 The metric MUST survive inside the budget — it must NEVER be the part that gets cut.
 
@@ -162,9 +157,8 @@ RULES:
 • The metric (e.g. "35%", "3M+ records", "$2M savings") is the MOST IMPORTANT part — protect it.
 • Count your characters BEFORE outputting. If over budget, cut adjectives and filler, NEVER the metric.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT — valid JSON only, no other text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 {
   "agents": { "primary": "GPT-5.2", "auditor": "DeepSeek-V3.2" },
   "ats": {

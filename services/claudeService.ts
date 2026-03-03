@@ -8,7 +8,7 @@ async function callClaude(
   system: string,
   userContent: string,
   temperature: number = 0.7,
-  maxTokens: number = 28000
+  maxTokens: number = 32000   // ✅ unlocked via streaming
 ): Promise<string> {
   const response = await fetch(ANTHROPIC_API_URL, {
     method: "POST",
@@ -21,6 +21,7 @@ async function callClaude(
     body: JSON.stringify({
       model: CLAUDE_MODEL,
       max_tokens: maxTokens,
+      stream: true,            // ✅ enables streaming = no 8192 cap
       temperature,
       system,
       messages: [{ role: "user", content: userContent }],
@@ -38,9 +39,36 @@ async function callClaude(
     throw new Error(`Claude API error (${status}): ${errBody || response.statusText}`);
   }
 
-  const data = await response.json();
-  const textBlock = data.content?.find((b: any) => b.type === "text");
-  return textBlock?.text || "";
+  // ── Stream reader 
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let fullText = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    const lines = chunk.split("\n");
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const jsonStr = line.slice(6).trim();
+      if (jsonStr === "[DONE]" || !jsonStr) continue;
+
+      try {
+        const parsed = JSON.parse(jsonStr);
+        // Anthropic streaming format: content_block_delta events carry the text
+        if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta") {
+          fullText += parsed.delta.text || "";
+        }
+      } catch {
+        // skip malformed chunks
+      }
+    }
+  }
+
+  return fullText;
 }
 
 export const createOptimizationPlanClaude = async (
@@ -111,9 +139,8 @@ Your unique strength: deep chain-of-thought reasoning to find the PERFECT phrasi
 maximizes ATS keyword density while maintaining natural, impactful prose. You reason through
 each bullet methodically before committing to the final wording.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 RESUME HEADER ANATOMY — READ CAREFULLY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ RESUME HEADER ANATOMY — READ CAREFULLY
+
 The resume header is EXACTLY THREE lines:
   Line 1: Full Name                        ← NEVER touch
   Line 2: Title1 | Title2 | Title3 | ...   ← ONLY line you may rewrite
@@ -128,9 +155,9 @@ CRITICAL RULES FOR TITLE MODIFICATION:
   If you include it in new_content it will be DUPLICATED — causing a broken header.
 • The character count of new_content MUST be within ±5 characters of original_excerpt.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚫 ABSOLUTE FORMATTING RULES — NEVER VIOLATE THESE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ ABSOLUTE FORMATTING RULES — NEVER VIOLATE THESE
+
 1. USE **double asterisks** to bold critical content — the document engine converts them
    to native Word bold automatically. You MUST bold:
    • Skills sub-headers: **Languages:**, **Databases:**, **Frameworks:**, **Cloud Platforms:**, **Tools:** etc.
@@ -140,15 +167,15 @@ CRITICAL RULES FOR TITLE MODIFICATION:
 3. NEVER add bullet symbols (•, -, *) — the document already has them in its formatting.
 4. LENGTH IS SACRED — new_content MUST be within ±5 characters of original_excerpt.
    If original is 80 chars → new_content must be 80–85 chars. This preserves page layout exactly.
-   If you cannot fit a rewrite in that budget, trim words rather than exceed the limit but complete the sentence.
+   If you cannot fit a rewrite in that budget, trim words rather than exceed the limit but complete the sentence that should make sense like a valid point according to the JD.
    Note: **bold** markers do NOT count toward the character budget.
 5. NEVER combine multiple bullet points into one new_content. One excerpt → one replacement.
 6. NEVER modify dates, company names, job titles, or contact information.
 7. NEVER add extra blank lines (\\n\\n) — this pushes content off the page.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📏 PAGE LIMIT ENFORCEMENT (HARD CONSTRAINT)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ PAGE LIMIT ENFORCEMENT (HARD CONSTRAINT)
+
 Original resume total characters: ${originalCharCount}
 Your MAXIMUM total characters across ALL new_content fields combined: ${maxAllowedChars}
 Maximum content lines allowed: 66–70 lines total (after header)
@@ -156,19 +183,18 @@ Maximum content lines allowed: 66–70 lines total (after header)
 PER-PARAGRAPH BUDGETS (your replacement cannot exceed these):
 ${paragraphBudgets}
 
-If you are over budget: shorten by removing filler words but complete the sentence formation, merging redundant phrases,
+If you are over budget: shorten by removing filler words but complete the sentence formation that should make sense, merging redundant phrases,
 or cutting the weakest bullet. NEVER add content that didn't exist before.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 HEADER PROTECTION — ZERO TOLERANCE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ HEADER PROTECTION — ZERO TOLERANCE
+
 See "RESUME HEADER ANATOMY" above.
 NEVER include the contact line (email | phone | linkedin) in any modification.
 When rewriting the professional title, new_content = title text only, same length as original.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ WHAT YOU SHOULD DO
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ WHAT YOU SHOULD DO
+
 - Replace weak action verbs with powerful ones (Led, Architected, Delivered, etc.)
 - Inject relevant keywords from the Job Description naturally into existing bullets
 - Wrap key technical terms in **double asterisks**: "proficient in **Python**, **PySpark**, and **AWS**"
@@ -177,13 +203,13 @@ When rewriting the professional title, new_content = title text only, same lengt
 - Tighten wordiness — every word must earn its place
 - Match the JD's exact terminology for tools, frameworks, and skills
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 METRIC WRITING DISCIPLINE (CRITICAL)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ METRIC WRITING DISCIPLINE (CRITICAL)
+
 Every bullet must include a quantified metric AND fit within ±5 chars of the original.
 The metric MUST survive inside the budget — it must NEVER be the part that gets cut.
 
-TECHNIQUE: Write TIGHT. Trim filler with complete sentence formation, not the metric.
+TECHNIQUE: Write TIGHT. Trim filler with complete sentence formation that must make sense, not the metric.
 
 BAD (verbose — metric at risk of being cut):
   "Optimized cloud runtime configurations with Kubernetes and Docker, increasing deployment efficiency by 35% through automated scaling." (133 chars)
@@ -196,12 +222,11 @@ RULES:
 • Use short forms: "configs" not "configurations", "infra" not "infrastructure", "dept" not "departments".
 • Drop filler: "in order to" → "to", "utilized" → "used", "implemented a solution that" → "built".
 • Front-load or embed the metric: "cut latency 40%" not "reducing the overall latency by approximately 40%".
-• The metric (e.g. "35%", "3M+ records", "$2M savings") is the MOST IMPORTANT part — protect it.
+• The metric (e.g. "35%", 20%, 23%, "3M+ records", "$2M savings") is the MOST IMPORTANT part — protect it.
 • Count your characters BEFORE outputting. If over budget, cut adjectives and filler, NEVER the metric.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT — valid JSON only, no other text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 {
   "agents": { "primary": "Claude Opus 4.6", "auditor": "ATS Auditor" },
   "ats": {
@@ -239,14 +264,15 @@ Feedback: ${critiqueContext.auditorFeedback}
 
 INSTRUCTIONS FOR THIS REVISION:
 1. Address every point raised in the feedback above.
-2. If the feedback mentions content being too long: MATHEMATICALLY reduce new_content length. This is non-negotiable.
+2. If the feedback mentions content being too long: MATHEMATICALLY reduce new_content length but complete the sentence formation 
+    completely even if it is short that shoud be meaningful and must make sense. This is non-negotiable.
 3. Output the COMPLETE updated list of modifications (keep good ones, fix bad ones).
 4. Re-check: does EVERY new_content contain zero markdown symbols? If yes, proceed.`;
 
     userPrompt = `ORIGINAL RESUME:\n${resumeText}\n\n${feedbackSection}\n\nPREVIOUS MODIFICATIONS:\n${JSON.stringify(critiqueContext.previousModifications, null, 2)}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nReturn updated JSON now.`;
   }
 
-  const content = await callClaude(apiKey, systemPrompt, userPrompt.trim(), 0.65);
+  const content = await callClaude(apiKey, systemPrompt, userPrompt.trim(), 0.65, 32000);
   if (!content) throw new Error("No response from Claude");
 
   try {
@@ -256,6 +282,7 @@ INSTRUCTIONS FOR THIS REVISION:
     return data;
   } catch (e) {
     console.error("JSON parse error:", e);
+    console.error("Raw response:", content.substring(0, 500)); // helps debug
     throw new Error("Failed to parse Claude response.");
   }
 };
