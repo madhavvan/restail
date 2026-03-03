@@ -90,7 +90,10 @@ export const getDocumentStats = (rawText: string): DocStats => {
 
   const paragraphBudgets = lines
     .filter(l => l.trim().length > 8)
-    .map(l => ({ text: l.trim(), maxChars: l.trim().length + 5 }));
+    .map(l => ({
+      text: l.trim(),
+      maxChars: l.trim().length < 122 ? 122 : l.trim().length + 5,
+    }));
 
   return { totalChars, totalLines, paragraphBudgets, isSingleLineHeaders };
 };
@@ -192,7 +195,13 @@ const FILLER_COMPRESSIONS: [RegExp, string][] = [
 
 const enforceLengthBudget = (original: string, newText: string): string => {
   const measuredLength = newText.replace(/\*\*([^*]+)\*\*/g, '$1').length;
-  const maxChars = original.length + 5; // tight — preserves exact line count
+
+  // Single-line bullets (< 122 chars) can expand up to the full Word line width.
+  // Multi-line content (≥ 122 chars) keeps the tight +5 budget to preserve line count.
+  const WORD_LINE_MAX = 122; // Calibri 11pt, 0.75" margins, experience section
+  const maxChars = original.length < WORD_LINE_MAX
+    ? WORD_LINE_MAX          // fill the whole line — no wasted space
+    : original.length + 5;  // multi-line: tight budget preserves page layout
 
   if (measuredLength <= maxChars) return newText;
 
