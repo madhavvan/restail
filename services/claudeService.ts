@@ -39,31 +39,41 @@ async function callClaude(
     throw new Error(`Claude API error (${status}): ${errBody || response.statusText}`);
   }
 
-  // ── Stream reader 
+  // ── Robust SSE stream reader ─────────────────────────────────────────────
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let fullText = "";
+  let buffer = ""; // accumulates data across chunk boundaries
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split("\n");
+    buffer += decoder.decode(value, { stream: true });
+
+    // Only process complete lines — leave partial lines in buffer
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? ""; // last item may be incomplete, keep for next chunk
 
     for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const jsonStr = line.slice(6).trim();
-      if (jsonStr === "[DONE]" || !jsonStr) continue;
+      const trimmed = line.trim();
+
+      // Skip blank lines and "event: ..." lines — only care about "data: ..."
+      if (!trimmed.startsWith("data:")) continue;
+
+      const jsonStr = trimmed.slice(5).trim(); // strip "data:" prefix
+      if (!jsonStr || jsonStr === "[DONE]") continue;
 
       try {
         const parsed = JSON.parse(jsonStr);
-        // Anthropic streaming format: content_block_delta events carry the text
-        if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta") {
-          fullText += parsed.delta.text || "";
+        if (
+          parsed.type === "content_block_delta" &&
+          parsed.delta?.type === "text_delta"
+        ) {
+          fullText += parsed.delta.text ?? "";
         }
       } catch {
-        // skip malformed chunks
+        // silently skip unparseable chunks (ping events, etc.)
       }
     }
   }
@@ -368,7 +378,12 @@ RULES FOR original_excerpt:
 - Must be at least 10 characters long
 - Case-sensitive, spacing preserved
 
-IMPORTANT: Return ONLY the raw JSON object. No markdown fences, no backticks, no preamble text. Just the JSON.
+🚨 CRITICAL OUTPUT RULE — READ THIS LAST:
+Your VERY FIRST character MUST be { and your VERY LAST character MUST be }.
+Do NOT write "Acknowledged", "Version 1.0", "Here is the JSON", or ANY text before or after the JSON.
+Do NOT explain yourself. Do NOT summarize what you did. Do NOT add a preamble.
+If you write even a single word before the opening { — the entire output is invalid and will crash the parser.
+OUTPUT = RAW JSON ONLY. Nothing else. Start typing { immediately.
 `.trim();
 
   let userPrompt = "";
@@ -388,20 +403,35 @@ INSTRUCTIONS FOR THIS REVISION:
 3. Output the COMPLETE updated list of modifications (keep good ones, fix bad ones).
 4. Re-check: does EVERY new_content contain zero markdown symbols? If yes, proceed.`;
 
-    userPrompt = `ORIGINAL RESUME:\n${resumeText}\n\n${feedbackSection}\n\nPREVIOUS MODIFICATIONS:\n${JSON.stringify(critiqueContext.previousModifications, null, 2)}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nReturn updated JSON now.`;
+    userPrompt = `ORIGINAL RESUME:\n${resumeText}\n\n${feedbackSection}\n\nPREVIOUS MODIFICATIONS:\n${JSON.stringify(critiqueContext.previousModifications, null, 2)}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nReturn updated JSON now. Remember: your response must start with { and end with }. No preamble.`;
   }
 
   const content = await callClaude(apiKey, systemPrompt, userPrompt.trim(), 0.65, 32000);
   if (!content) throw new Error("No response from Claude");
 
   try {
-    const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
+    // Strip markdown fences if present
+    let cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim();
+
+    // ✅ Defensive JSON extraction — handles any preamble text Claude may add
+    // Finds the first { and last } to extract just the JSON object
+    const firstBrace = cleanContent.indexOf('{');
+    const lastBrace  = cleanContent.lastIndexOf('}');
+
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+      console.error("No valid JSON object found in response");
+      console.error("Raw response (first 500 chars):", content.substring(0, 500));
+      throw new Error("No JSON object found in Claude response.");
+    }
+
+    cleanContent = cleanContent.substring(firstBrace, lastBrace + 1);
+
     const data = JSON.parse(cleanContent) as TailoredResumeData;
     if (!data.modifications || !Array.isArray(data.modifications)) data.modifications = [];
     return data;
   } catch (e) {
     console.error("JSON parse error:", e);
-    console.error("Raw response:", content.substring(0, 500)); // helps debug
+    console.error("Raw response (first 500 chars):", content.substring(0, 500));
     throw new Error("Failed to parse Claude response.");
   }
 };
