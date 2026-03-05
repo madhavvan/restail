@@ -16,7 +16,7 @@ const PROVIDERS = [
   { key: 'openai',   label: 'OpenAI (GPT-5.2)',       color: 'emerald', fieldKey: 'openaiApiKey'   },
   { key: 'deepseek', label: 'DeepSeek (V3.2)',         color: 'blue',    fieldKey: 'deepseekApiKey' },
   { key: 'gemini',   label: 'Google Gemini (3.1 Pro)',  color: 'violet',  fieldKey: 'geminiApiKey'   },
-  { key: 'claude',   label: 'Anthropic (Opus 4.6)',     color: 'amber',   fieldKey: 'claudeApiKey'   },
+  { key: 'claude',   label: 'Anthropic (Sonnet 4.6)',     color: 'amber',   fieldKey: 'claudeApiKey'   },
 ] as const;
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onSave }) => {

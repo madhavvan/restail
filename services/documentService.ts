@@ -188,20 +188,31 @@ const FILLER_COMPRESSIONS: [RegExp, string][] = [
   [/\benvironment\b/gi,       'env'],
   [/\bdepartments\b/gi,       'depts'],
   [/\bapplication\b/gi,       'app'],
-  [/\boptimization\b/gi,      'optimization'],  // no-op placeholder
+  [/\boptimization\b/gi,      'optim.'],
   [/\band\b/gi,               '&'],
   [/\s{2,}/g,                 ' '],             // collapse double spaces
 ];
 
-const enforceLengthBudget = (original: string, newText: string): string => {
-  const measuredLength = newText.replace(/\*\*([^*]+)\*\*/g, '$1').length;
+const enforceLengthBudget = (original: string, newText: string, isFinalRound = false): string => {
+  const visibleLength = (text: string) => text.replace(/\*\*([^*]+)\*\*/g, '$1').length;
+  const measuredLength = visibleLength(newText);
 
   // Single-line bullets (< 122 chars) can expand up to the full Word line width.
   // Multi-line content (≥ 122 chars) keeps the tight +5 budget to preserve line count.
   const WORD_LINE_MAX = 122; // Calibri 11pt, 0.75" margins, experience section
-  const maxChars = original.length < WORD_LINE_MAX
-    ? WORD_LINE_MAX          // fill the whole line — no wasted space
-    : original.length + 5;  // multi-line: tight budget preserves page layout
+  const isMultiLine = original.length >= WORD_LINE_MAX;
+
+  const baseMax = isMultiLine
+    ? original.length + 5   // multi-line: tight budget preserves page layout
+    : WORD_LINE_MAX;         // single-line: fill the whole line — no wasted space
+
+  // Final round: +3 extra for multi-line (total +8). Single-line is already at WORD_LINE_MAX.
+  // +8 total ≈ 1 short word — safe, won't cause line wrap in Calibri 11pt.
+  const maxChars = (isFinalRound && isMultiLine) ? original.length + 8 : baseMax;
+
+  // Hard ceiling — NEVER exceed this regardless of any logic below.
+  // For multi-line: max +10. For single-line: WORD_LINE_MAX (already the ceiling).
+  const HARD_CAP = isMultiLine ? original.length + 10 : WORD_LINE_MAX;
 
   if (measuredLength <= maxChars) return newText;
 
@@ -238,6 +249,61 @@ const enforceLengthBudget = (original: string, newText: string): string => {
   const compressedVisible = compressed.replace(/\*\*([^*]+)\*\*/g, '$1');
   if (compressedVisible.length <= maxChars && /[.!?%)"]$/.test(compressedVisible)) {
     return compressed;
+  }
+
+  // ── Strategy 0.5 (Final round): Front-only word removal ────────────────
+  // Instead of cutting from the back (which kills metrics), remove words
+  // from the opening action phrase. The ending 25% of the bullet is sacred.
+  if (isFinalRound) {
+    const compStripped = compressedVisible; // already filler-compressed
+    const protectLen = Math.max(20, Math.floor(compStripped.length * 0.25));
+    const endingSlice = compStripped.slice(-protectLen);
+    const endingHasValue = /\d+%|\d+[MBK]\+?|\$\d/i.test(endingSlice) ||
+                           /[.!?%)"]\s*$/.test(compStripped);
+
+    if (endingHasValue && !DANGLING_WORDS.test(compStripped)) {
+      // Try progressively removing words/clauses from the front of compressed text
+      let frontStripped = compStripped;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        if (frontStripped.length <= maxChars) break;
+
+        // Prefer removing a front clause (up to first comma)
+        const commaPos = frontStripped.indexOf(', ');
+        const spacePos = frontStripped.indexOf(' ', 1);
+
+        if (commaPos > 0 && commaPos < frontStripped.length * 0.4) {
+          frontStripped = frontStripped.slice(commaPos + 2);
+        } else if (spacePos > 0) {
+          frontStripped = frontStripped.slice(spacePos + 1);
+        } else {
+          break;
+        }
+      }
+
+      // Validate: still a meaningful sentence, within budget, and ending intact
+      if (frontStripped.length <= HARD_CAP &&
+          frontStripped.length >= compStripped.length * 0.55 &&
+          frontStripped.slice(-protectLen) === endingSlice &&
+          /[.!?%)"]$/.test(frontStripped)) {
+        // Rebuild with bold markers from compressed version
+        // Since we trimmed from the front of the visible text, we need to
+        // find where the kept portion starts in the bold-marker version
+        const cutLen = compStripped.length - frontStripped.length;
+        // Advance past cutLen visible chars in the compressed (bold) string
+        let vCount = 0, bPos = 0;
+        while (bPos < compressed.length && vCount < cutLen) {
+          if (compressed[bPos] === '*' && compressed[bPos + 1] === '*') {
+            bPos += 2; continue;
+          }
+          vCount++; bPos++;
+        }
+        const frontTrimmedBold = compressed.substring(bPos).trim();
+        if (visibleLength(frontTrimmedBold) <= HARD_CAP) {
+          console.log(`[FinalRound] Front-trimmed: removed ${cutLen} chars from opening`);
+          return frontTrimmedBold;
+        }
+      }
+    }
   }
 
   // For strategies 1-3, work on visible text but map positions back to bold-included text.
@@ -287,6 +353,28 @@ const enforceLengthBudget = (original: string, newText: string): string => {
   const resultVisible = result.replace(/\*\*([^*]+)\*\*/g, '$1');
   if (resultVisible && !/[.!?%)"]$/.test(resultVisible)) {
     result += '.';
+  }
+
+  // ── Final-round safety net: if strategies 1-3 destroyed the metric, ────
+  // prefer the filler-compressed version IF it's a complete sentence
+  // AND within the hard cap. Never return text exceeding HARD_CAP.
+  if (isFinalRound) {
+    const finalResultVisible = result.replace(/\*\*([^*]+)\*\*/g, '$1');
+    const origNewVisible = newText.replace(/\*\*([^*]+)\*\*/g, '$1');
+
+    const origLast20 = origNewVisible.slice(-20);
+    const resultLast20 = finalResultVisible.slice(-20);
+    const origHadMetric = /\d+%|\d+[MBK]\+?|\$\d/i.test(origLast20);
+    const resultLostMetric = origHadMetric && !/\d+%|\d+[MBK]\+?|\$\d/i.test(resultLast20);
+
+    if (resultLostMetric) {
+      // Prefer compressed version if it's complete AND within hard cap
+      if (compressedVisible.length <= HARD_CAP && /[.!?%)"]$/.test(compressedVisible)) {
+        console.log(`[FinalRound] Used compressed version to preserve metric (${compressedVisible.length} chars)`);
+        return compressed;
+      }
+      // Otherwise keep the trimmed result — don't bypass the budget
+    }
   }
 
   return result;
@@ -563,9 +651,10 @@ const applyReplacement = (
   paragraph: Element,
   xmlDoc: Document,
   originalText: string,
-  newText: string
+  newText: string,
+  isFinalRound = false
 ): void => {
-  const budgeted  = enforceLengthBudget(originalText, newText);
+  const budgeted  = enforceLengthBudget(originalText, newText, isFinalRound);
   const finalText = cleanNewContent(budgeted);
 
   // ── Gather ALL direct children that are content (runs OR hyperlinks) ─────
@@ -620,6 +709,10 @@ const applyReplacement = (
   }
 
   // ── Capture base formatting from the first title run ─────────────────────
+  // KEY FIX: The break run often contains BOTH the title text AND <w:br/> in
+  // the same <w:r>. If titleChildren before the break is empty or has no rPr,
+  // we MUST fall back to the break run's rPr — that's where the formatting
+  // (white color, font size, etc.) lives.
   let baseRPr: Node | null = null;
   let originalIsBold = false;
 
@@ -646,8 +739,31 @@ const applyReplacement = (
     if (totalLen > 0 && boldLen / totalLen > 0.5) originalIsBold = true;
   }
 
+  // FALLBACK: If baseRPr is still null (titleChildren empty or had no rPr),
+  // grab it from the break run — which is the most common case when the title
+  // text and <w:br/> share the same <w:r> element in the original document.
+  if (!baseRPr && breakRunElement) {
+    const breakRPr = breakRunElement.getElementsByTagNameNS(W_NS, 'rPr')[0];
+    if (breakRPr) baseRPr = breakRPr.cloneNode(true);
+  }
+
   // ── Deep-clone the contact section BEFORE removing anything ──────────────
-  const savedContactNodes: Node[] = contactChildren.map(el => el.cloneNode(true));
+  // KEY FIX: The break run often contains old title text in its <w:t> element
+  // alongside the <w:br/>. We must STRIP the <w:t> from the break run clone
+  // so the old title text doesn't get re-attached after replacement.
+  const savedContactNodes: Node[] = contactChildren.map((el, idx) => {
+    const clone = el.cloneNode(true) as Element;
+
+    // Only process the FIRST element in contactChildren — the break run
+    if (idx === 0 && el === breakRunElement) {
+      // Remove all <w:t> elements from the break run clone
+      // This strips the old title text while keeping <w:rPr> and <w:br/>
+      const textNodes = Array.from(clone.getElementsByTagNameNS(W_NS, 't'));
+      textNodes.forEach(t => t.parentNode?.removeChild(t));
+    }
+
+    return clone;
+  });
 
   // ── Remove ALL content children (title + contact) from the paragraph ─────
   allContentChildren.forEach(child => {
@@ -665,6 +781,19 @@ const applyReplacement = (
     normTitle.trim() !== normOrig.trim() &&
     normOrig.length < normTitle.length * 0.95;
 
+  // ── KEY FIX: Detect title+contact paragraphs ──────────────────────────────
+  // When this paragraph has a <w:br> followed by contact info (email/phone/links),
+  // the text BEFORE the break is the professional title line.
+  // The AI model may send only a partial match of the title (e.g. missing a pipe
+  // or a trailing word). In such cases, the partial-match logic would write
+  // before + newContent + after — mixing OLD title fragments with the NEW title.
+  //
+  // FIX: For title+contact paragraphs, ALWAYS do a FULL replacement of the
+  // entire title section with new_content. Never keep leftover old title text.
+  // Also ALWAYS use originalIsBold so the original run formatting (including
+  // white text color on dark backgrounds) is preserved exactly.
+  const isTitleContactParagraph = breakRunElement !== null && contactChildren.length > 0;
+
   const writeFinalText = (textToWrite: string, inheritBold: boolean): void => {
     textToWrite.split('\n').forEach((line, lineIdx) => {
       if (lineIdx > 0) {
@@ -676,7 +805,12 @@ const applyReplacement = (
     });
   };
 
-  if (isPartial) {
+  if (isTitleContactParagraph) {
+    // Title+contact paragraph: ALWAYS replace the full title section.
+    // Never do partial matching — the new_content IS the complete new title.
+    // Use originalIsBold to preserve the original formatting (color, font, etc.)
+    writeFinalText(finalText, originalIsBold);
+  } else if (isPartial) {
     let matchStart = titleText.indexOf(originalText);
     if (matchStart === -1) {
       matchStart = titleText.toLowerCase().indexOf(originalText.toLowerCase());
@@ -687,7 +821,7 @@ const applyReplacement = (
       const after  = titleText.substring(matchStart + originalText.length);
 
       if (before) writeRun(xmlDoc, paragraph, before, baseRPr, originalIsBold);
-      writeFinalText(finalText, false);
+      writeFinalText(finalText, originalIsBold);
       if (after)  writeRun(xmlDoc, paragraph, after,  baseRPr, originalIsBold);
     } else {
       writeFinalText(finalText, originalIsBold);
@@ -872,7 +1006,8 @@ const removeTrailingEmptyParagraphs = (xmlDoc: Document): void => {
 };
 const applyModsToXml = (
   xmlDoc: Document,
-  modifications: Modification[]
+  modifications: Modification[],
+  isFinalRound = false
 ): { xmlDoc: Document; applied: number } => {
   const paragraphs = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, 'p'));
   let applied = 0;
@@ -890,7 +1025,7 @@ const applyModsToXml = (
       const pt = normalizeForMatch(p.textContent || '');
       if (pt.includes(searchNorm)) {
         if (isContactLine(p)) { found = true; break; } // silently skip protected lines
-        applyReplacement(p, xmlDoc, original, newContent);
+        applyReplacement(p, xmlDoc, original, newContent, isFinalRound);
         applied++; found = true; break;
       }
     }
@@ -902,7 +1037,7 @@ const applyModsToXml = (
         const pt = normalizeForMatch(p.textContent || '');
         if (pt.includes(prefix)) {
           if (isContactLine(p)) { found = true; break; }
-          applyReplacement(p, xmlDoc, original, newContent);
+          applyReplacement(p, xmlDoc, original, newContent, isFinalRound);
           applied++; found = true; break;
         }
       }
@@ -922,7 +1057,7 @@ const applyModsToXml = (
         if (score > bestScore && score >= 0.4) { bestScore = score; best = p; }
       }
       if (best) {
-        applyReplacement(best, xmlDoc, original, newContent);
+        applyReplacement(best, xmlDoc, original, newContent, isFinalRound);
         applied++;
       }
     }
@@ -944,7 +1079,8 @@ const applyModsToXml = (
 // ─────────────────────────────────────────────────────────────────────────────
 export const applyModificationsToBuffer = async (
   originalBuffer: ArrayBuffer,
-  modifications: Modification[]
+  modifications: Modification[],
+  isFinalRound = false
 ): Promise<ArrayBuffer> => {
   if (!modifications?.length) return originalBuffer;
 
@@ -957,8 +1093,8 @@ export const applyModificationsToBuffer = async (
   const xmlContent = await docFile.async('string');
   const xmlDoc     = new DOMParser().parseFromString(xmlContent, 'text/xml');
 
-  const { xmlDoc: updated, applied } = applyModsToXml(xmlDoc, modifications);
-  console.log(`[LiveDoc] ${applied}/${modifications.length} mods applied`);
+  const { xmlDoc: updated, applied } = applyModsToXml(xmlDoc, modifications, isFinalRound);
+  console.log(`[LiveDoc] ${applied}/${modifications.length} mods applied (finalRound=${isFinalRound})`);
 
   zip.file('word/document.xml', new XMLSerializer().serializeToString(updated));
   const blob: Blob = await zip.generateAsync({ type: 'blob' });
@@ -971,7 +1107,8 @@ export const applyModificationsToBuffer = async (
 export const modifyAndDownloadDocx = async (
   originalFile: File,
   modifications: Modification[],
-  newFileName = 'Tailored_Resume.docx'
+  newFileName = 'Tailored_Resume.docx',
+  isFinalRound = true
 ): Promise<void> => {
   try {
     const JSZip  = await getJSZip();
@@ -988,7 +1125,7 @@ export const modifyAndDownloadDocx = async (
       'text/xml'
     );
 
-    const { xmlDoc: updated, applied } = applyModsToXml(xmlDoc, modifications);
+    const { xmlDoc: updated, applied } = applyModsToXml(xmlDoc, modifications, isFinalRound);
     console.log(`[Download] ${applied}/${modifications.length} mods applied`);
 
     if (applied === 0 && modifications.length > 0) {

@@ -278,7 +278,7 @@ const agentText = (n: string) => n.includes('GPT') ? 'text-emerald-700' : n.incl
 
 // ─── Provider label helper ────────────────────────────────────────────────────
 const providerLabel = (p: string) =>
-  p === 'openai' ? 'GPT-5.2' : p === 'deepseek' ? 'DeepSeek-V3.2' : p === 'claude' ? 'Claude Opus 4.6' : 'Gemini 3.1 Pro';
+  p === 'openai' ? 'GPT-5.2' : p === 'deepseek' ? 'DeepSeek-V3.2' : p === 'claude' ? 'Claude Sonnet 4.6' : 'Gemini 3.1 Pro';
 const providerPairLabel = (p: string, f?: string) => {
   const writer = providerLabel(p);
   const feedback = f ? providerLabel(f) : 'DeepSeek-V3.2';
@@ -416,11 +416,11 @@ const App: React.FC = () => {
   };
 
   // ── Bulk update (fallback for final pass) ──
-  const updateLiveDoc = async (mods: any[]) => {
+  const updateLiveDoc = async (mods: any[], isFinalRound = false) => {
     if (!originalFileBuffer || !mods?.length) return;
     setIsDocUpdating(true);
     try {
-      const newBuf = await applyModificationsToBuffer(originalFileBuffer.slice(0), mods);
+      const newBuf = await applyModificationsToBuffer(originalFileBuffer.slice(0), mods, isFinalRound);
       setLiveDocBuffer(newBuf);
     } catch (e) {
       console.error('Live doc update failed:', e);
@@ -530,6 +530,19 @@ const App: React.FC = () => {
       result += '.';
     }
 
+    // ── Safety net: if trimming destroyed a metric, try to salvage ──────
+    // Instead of bypassing the budget entirely, only prefer the original
+    // if it's within a tight tolerance of the target length.
+    const origLast25 = visibleText.slice(-25);
+    const resultLast25 = result.replace(/\*\*([^*]+)\*\*/g, '$1').slice(-25);
+    const origHadMetric = /\d+%|\d+[MBK]\+?|\$\d/i.test(origLast25);
+    const resultLostMetric = origHadMetric && !/\d+%|\d+[MBK]\+?|\$\d/i.test(resultLast25);
+    if (resultLostMetric && visibleText.length <= maxVisibleChars + 10) {
+      // Original is only slightly over the target — safe to keep
+      console.log(`[smartTrim] Kept original to preserve metric (${visibleText.length}/${maxVisibleChars} chars)`);
+      return text;
+    }
+
     return result;
   };
 
@@ -592,16 +605,26 @@ const App: React.FC = () => {
       const mod      = mods[idx];
       const origLen  = (mod.original_excerpt || '').length;
       const currentVisibleLen = (mod.new_content || '').replace(/\*\*([^*]+)\*\*/g, '$1').length;
+      const growth   = currentVisibleLen - origLen;
 
-      const targetLen = Math.max(origLen, currentVisibleLen - remaining);
-      if (targetLen >= currentVisibleLen) continue;
+      if (growth <= 0) continue;
 
-      // Use intelligent trimming that preserves bold markers and sentence integrity
-      const trimmedContent = smartTrim(mod.new_content || '', targetLen);
-      const trimmedVisibleLen = trimmedContent.replace(/\*\*([^*]+)\*\*/g, '$1').length;
+      // Try to trim intelligently first — preserve the improvement if possible
+      const targetLen = Math.max(origLen, 50);
+      const trimmed = smartTrim(mod.new_content || '', targetLen);
+      const trimmedVisibleLen = trimmed.replace(/\*\*([^*]+)\*\*/g, '$1').length;
       const saved = currentVisibleLen - trimmedVisibleLen;
-      remaining -= saved;
-      mods[idx] = { ...mod, new_content: trimmedContent };
+
+      if (saved > 0) {
+        remaining -= saved;
+        mods[idx] = { ...mod, new_content: trimmed };
+        addLog('SYSTEM', `✂️ Trimmed 1 modification to fit page (saved ${saved} chars)`);
+      } else {
+        // smartTrim couldn't reduce it — only then revert as last resort
+        remaining -= growth;
+        mods[idx] = { ...mod, new_content: mod.original_excerpt || '' };
+        addLog('SYSTEM', `↩️ Reverted 1 modification — couldn't trim enough (saved ${growth} chars)`);
+      }
     }
 
     const finalDraft = constructDraft(originalText, mods);
@@ -694,7 +717,7 @@ const App: React.FC = () => {
       } else if (provider === 'gemini') {
         primaryName  = 'Gemini 3.1 Pro';
       } else if (provider === 'claude') {
-        primaryName  = 'Claude Opus 4.6';
+        primaryName  = 'Claude Sonnet 4.6';
       }
 
       // Dynamic feedback model from settings
@@ -848,9 +871,71 @@ const App: React.FC = () => {
       if (cancelRef.current) return;
 
       if (finalData.modifications?.length > 0) {
-        data = finalData;
-        // Final pass — apply all at once since it's the polish round
-        await updateLiveDoc(data.modifications);
+        // ── Merge V1.1 into V1.0: remap original_excerpt to match the real .docx ──
+        // V1.1's original_excerpt often references V1.0's new_content (the modified text),
+        // but applyModificationsToBuffer always runs against the ORIGINAL untouched buffer.
+        // So we need to translate V1.1's excerpt back to what actually exists in the .docx.
+        const v1Mods   = data.modifications ?? [];
+        const v1_1Mods = finalData.modifications;
+
+        // Index V1.0 mods by their new_content (normalized) so we can match when
+        // V1.1 uses V1.0's output as its original_excerpt
+        const normalizeKey = (s: string) => (s || '').replace(/\*\*([^*]+)\*\*/g, '$1').trim().toLowerCase();
+
+        const v1ByNewContent = new Map<string, typeof v1Mods[0]>();
+        for (const m of v1Mods) {
+          const key = normalizeKey(m.new_content || '');
+          if (key) v1ByNewContent.set(key, m);
+        }
+
+        const v1ByOriginal = new Map<string, typeof v1Mods[0]>();
+        for (const m of v1Mods) {
+          const key = normalizeKey(m.original_excerpt || '');
+          if (key) v1ByOriginal.set(key, m);
+        }
+
+        const merged: typeof v1Mods = [];
+        const usedV1Keys = new Set<string>();
+
+        for (const v11Mod of v1_1Mods) {
+          const excerptKey = normalizeKey(v11Mod.original_excerpt || '');
+
+          // Case A: V1.1's original_excerpt matches a V1.0's new_content
+          // → The AI refined V1.0's output → remap to V1.0's original_excerpt
+          const matchByNew = v1ByNewContent.get(excerptKey);
+          if (matchByNew) {
+            merged.push({
+              ...v11Mod,
+              original_excerpt: matchByNew.original_excerpt, // ← points to real .docx text
+            });
+            usedV1Keys.add(normalizeKey(matchByNew.original_excerpt || ''));
+            continue;
+          }
+
+          // Case B: V1.1's original_excerpt matches a V1.0's original_excerpt directly
+          // → Same bullet, new content → keep as-is
+          const matchByOrig = v1ByOriginal.get(excerptKey);
+          if (matchByOrig) {
+            merged.push(v11Mod);
+            usedV1Keys.add(excerptKey);
+            continue;
+          }
+
+          // Case C: Brand new mod from V1.1 (not in V1.0)
+          merged.push(v11Mod);
+        }
+
+        // Carry forward V1.0 mods that V1.1 didn't touch or refine
+        for (const m of v1Mods) {
+          const key = normalizeKey(m.original_excerpt || '');
+          if (!usedV1Keys.has(key)) {
+            merged.push(m);
+          }
+        }
+
+        data = { ...finalData, modifications: merged };
+        // Final pass — apply all merged mods at once (FINAL ROUND: smarter trimming)
+        await updateLiveDoc(data.modifications, true);
         setLiveAtsScore(finalData.ats?.score ?? auditScore);
       }
 
@@ -865,7 +950,7 @@ const App: React.FC = () => {
       // ── Re-sync live preview buffer with the final (post-trim) modifications ──
       // This ensures the preview exactly matches what the user downloads.
       if (data.modifications?.length > 0) {
-        await updateLiveDoc(data.modifications);
+        await updateLiveDoc(data.modifications, true);
       }
 
       addLog('SYSTEM', `🎉 Done! ${data.modifications?.length ?? 0} modifications ready. Preparing download…`);
@@ -907,7 +992,7 @@ const App: React.FC = () => {
       { key: 'openai', label: 'GPT-5.2', hasKey: !!settingsRef.current.openaiApiKey },
       { key: 'deepseek', label: 'DeepSeek-V3.2', hasKey: !!settingsRef.current.deepseekApiKey },
       { key: 'gemini', label: 'Gemini 3.1 Pro', hasKey: !!settingsRef.current.geminiApiKey },
-      { key: 'claude', label: 'Claude Opus 4.6', hasKey: !!settingsRef.current.claudeApiKey },
+      { key: 'claude', label: 'Claude Sonnet 4.6', hasKey: !!settingsRef.current.claudeApiKey },
     ];
     return all.filter(p => p.key !== current && p.hasKey);
   };
@@ -1069,7 +1154,7 @@ const App: React.FC = () => {
                       { key: 'openai', label: 'GPT-5.2', icon: OPENAI_LOGO, ring: 'ring-emerald-400', bg: 'bg-emerald-50', text: 'text-emerald-700', hasKey: !!settings.openaiApiKey },
                       { key: 'deepseek', label: 'DeepSeek-V3.2', icon: DEEPSEEK_LOGO, ring: 'ring-blue-400', bg: 'bg-blue-50', text: 'text-blue-700', hasKey: !!settings.deepseekApiKey },
                       { key: 'gemini', label: 'Gemini 3.1 Pro', icon: GEMINI_LOGO, ring: 'ring-violet-400', bg: 'bg-violet-50', text: 'text-violet-700', hasKey: !!settings.geminiApiKey },
-                      { key: 'claude', label: 'Claude Opus 4.6', icon: CLAUDE_LOGO, ring: 'ring-amber-400', bg: 'bg-amber-50', text: 'text-amber-700', hasKey: !!settings.claudeApiKey },
+                      { key: 'claude', label: 'Claude Sonnet 4.6', icon: CLAUDE_LOGO, ring: 'ring-amber-400', bg: 'bg-amber-50', text: 'text-amber-700', hasKey: !!settings.claudeApiKey },
                     ] as const).map(m => (
                       <button
                         key={m.key}
@@ -1111,7 +1196,7 @@ const App: React.FC = () => {
                       { key: 'openai', label: 'GPT-5.2', icon: OPENAI_LOGO, ring: 'ring-emerald-400', bg: 'bg-emerald-50', text: 'text-emerald-700', hasKey: !!settings.openaiApiKey },
                       { key: 'deepseek', label: 'DeepSeek-V3.2', icon: DEEPSEEK_LOGO, ring: 'ring-blue-400', bg: 'bg-blue-50', text: 'text-blue-700', hasKey: !!settings.deepseekApiKey },
                       { key: 'gemini', label: 'Gemini 3.1 Pro', icon: GEMINI_LOGO, ring: 'ring-violet-400', bg: 'bg-violet-50', text: 'text-violet-700', hasKey: !!settings.geminiApiKey },
-                      { key: 'claude', label: 'Claude Opus 4.6', icon: CLAUDE_LOGO, ring: 'ring-amber-400', bg: 'bg-amber-50', text: 'text-amber-700', hasKey: !!settings.claudeApiKey },
+                      { key: 'claude', label: 'Claude Sonnet 4.6', icon: CLAUDE_LOGO, ring: 'ring-amber-400', bg: 'bg-amber-50', text: 'text-amber-700', hasKey: !!settings.claudeApiKey },
                     ] as const).map(m => {
                       const isWriter = settings.activeProvider === m.key;
                       return (

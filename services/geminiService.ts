@@ -316,15 +316,36 @@ FINAL CHECKLIST — before outputting any new_content, ask yourself:
     userPrompt = `ORIGINAL RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nCreate the optimization and return only valid JSON.`;
   } else {
     systemInstruction += `
-\n\nPREVIOUS AUDITOR FEEDBACK:
+
+FINAL REFINEMENT GOLDEN RULE (READ THIS FIRST — NON-NEGOTIABLE):
+This is the version the user will actually use. Quality of completeness beats strict character count.
+- Every single new_content MUST be a complete, professional sentence that ends with proper punctuation (. ! ? %).
+- Protect the ending (metric + impact) at ALL costs — it is the most valuable part of the bullet.
+- When shortening, ONLY remove words from the opening action phrase — never from the ending.
+- It is BETTER to be 8–12 characters over budget with a strong complete sentence than to have ANY cut-off or awkward ending.
+- If you cannot improve a bullet without breaking completeness, KEEP the previous strong version unchanged.
+- NEVER output new_content that ends with: "by", "with", "and", "via", "for", "to", "or", "&", "using", "through", "across" — these are ALWAYS wrong.
+- NEVER output new_content where the metric is missing its unit (e.g. "35%" alone — always "35% faster", "35% reduction", "cutting time by 35%").
+
+PREVIOUS AUDITOR FEEDBACK:
 Current Score: ${critiqueContext.currentScore}%
 Feedback: ${critiqueContext.auditorFeedback}
 
-INSTRUCTIONS:
+INSTRUCTIONS FOR VERSION 1.1 (FINAL REFINEMENT):
 1. Carefully address every point raised in the feedback.
 2. IF THERE IS A "CRITICAL LAYOUT VIOLATION" IN THE FEEDBACK: You MUST mathematically reduce the length of your 'new_content' to fix it. This is an absolute hard constraint. Do not fail this.
 3. Output the COMPLETE updated list of modifications (keep good ones + fix bad ones + add new ones).
-4. Your response MUST start with { and end with }. No preamble, no acknowledgment text. Raw JSON only.`;
+4. Your response MUST start with { and end with }. No preamble, no acknowledgment text. Raw JSON only.
+
+⚠️ CRITICAL — REFINEMENT, NOT TRIMMING (ABSOLUTE RULE):
+Your job in this round is to REFINE the wording of Version 1.0, NOT to trim, truncate, or remove content.
+- NEVER cut a sentence short or leave it incomplete.
+- NEVER remove bullet points, metrics, or achievements that existed in Version 1.0.
+- NEVER produce new_content that ends mid-sentence or with a dangling preposition.
+- If the auditor asks for changes, REPHRASE the content to address the feedback while keeping the SAME character length (±5 chars of original_excerpt).
+- Think of this as a COPY-EDITING pass: swap synonyms, tighten phrasing, inject missing keywords — all within the same character envelope.
+- Every new_content MUST be a complete, polished sentence that ends with proper punctuation and a complete thought.
+- If a modification from Version 1.0 was already strong, keep it as-is. Do not degrade good work.`;
     
     userPrompt = `
 ORIGINAL RESUME:

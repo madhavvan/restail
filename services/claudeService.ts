@@ -1,7 +1,7 @@
 import { TailoredResumeData } from "../types";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const CLAUDE_MODEL = "claude-opus-4-6";
+const CLAUDE_MODEL = "claude-sonnet-4-5-20250929";
 
 async function callClaude(
   apiKey: string,
@@ -88,7 +88,7 @@ export const createOptimizationPlanClaude = async (
 ): Promise<string> => {
   if (!apiKey) throw new Error("Claude API Key missing.");
 
-  const system = `You are Claude Opus 4.6, the Primary Optimizer collaborating with the Critical ATS Auditor.
+  const system = `You are Claude Sonnet 4.6, the Primary Optimizer collaborating with the Critical ATS Auditor.
 You are an Elite Resume Copywriter and ATS Strategist with 40+ years of experience in IT systems, AI, and Data Engineering.
 Your analytical depth and reasoning precision are unmatched — you decompose every bullet for maximum keyword density and impact.
 
@@ -138,7 +138,7 @@ export const tailorResumeClaude = async (
     .join('\n');
 
 const systemPrompt = `
-You are Claude Opus 4.6 — the most analytically precise and deeply reasoning Elite Executive Resume Writer and ATS Strategist.
+You are Claude Sonnet 4.6 — the most analytically precise and deeply reasoning Elite Executive Resume Writer and ATS Strategist.
 You are collaborating live with a Critical ATS Auditor.
 
 Your job is to rewrite ONLY the text content of specific bullet points and sections
@@ -357,7 +357,7 @@ FINAL CHECKLIST — before outputting any new_content, ask yourself:
 OUTPUT FORMAT — valid JSON only, no other text
 
 {
-  "agents": { "primary": "Claude Opus 4.6", "auditor": "ATS Auditor" },
+  "agents": { "primary": "Claude Sonnet 4.6", "auditor": "ATS Auditor" },
   "ats": {
     "score": 95,
     "feedback": "Specific feedback on this version...",
@@ -392,16 +392,36 @@ OUTPUT = RAW JSON ONLY. Nothing else. Start typing { immediately.
     userPrompt = `ORIGINAL RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nCreate the optimization and return only valid JSON.`;
   } else {
     const feedbackSection = `
+FINAL REFINEMENT GOLDEN RULE (READ THIS FIRST — NON-NEGOTIABLE):
+This is the version the user will actually use. Quality of completeness beats strict character count.
+- Every single new_content MUST be a complete, professional sentence that ends with proper punctuation (. ! ? %).
+- Protect the ending (metric + impact) at ALL costs — it is the most valuable part of the bullet.
+- When shortening, ONLY remove words from the opening action phrase — never from the ending.
+- It is BETTER to be 8–12 characters over budget with a strong complete sentence than to have ANY cut-off or awkward ending.
+- If you cannot improve a bullet without breaking completeness, KEEP the previous strong version unchanged.
+- NEVER output new_content that ends with: "by", "with", "and", "via", "for", "to", "or", "&", "using", "through", "across" — these are ALWAYS wrong.
+- NEVER output new_content where the metric is missing its unit (e.g. "35%" alone — always "35% faster", "35% reduction", "cutting time by 35%").
+
 PREVIOUS AUDITOR FEEDBACK:
 Current ATS Score: ${critiqueContext.currentScore}%
 Feedback: ${critiqueContext.auditorFeedback}
 
-INSTRUCTIONS FOR THIS REVISION:
+INSTRUCTIONS FOR VERSION 1.1 (FINAL REFINEMENT):
 1. Address every point raised in the feedback above.
 2. If the feedback mentions content being too long: MATHEMATICALLY reduce new_content length but complete the sentence formation
    completely even if it is short — it must be meaningful and must make sense. This is non-negotiable.
 3. Output the COMPLETE updated list of modifications (keep good ones, fix bad ones).
-4. Re-check: does EVERY new_content contain zero markdown symbols? If yes, proceed.`;
+4. Re-check: does EVERY new_content contain zero markdown symbols? If yes, proceed.
+
+⚠️ CRITICAL — REFINEMENT, NOT TRIMMING (ABSOLUTE RULE):
+Your job in this round is to REFINE the wording of Version 1.0, NOT to trim, truncate, or remove content.
+- NEVER cut a sentence short or leave it incomplete.
+- NEVER remove bullet points, metrics, or achievements that existed in Version 1.0.
+- NEVER produce new_content that ends mid-sentence or with a dangling preposition.
+- If the auditor asks for changes, REPHRASE the content to address the feedback while keeping the SAME character length (±5 chars of original_excerpt).
+- Think of this as a COPY-EDITING pass: swap synonyms, tighten phrasing, inject missing keywords — all within the same character envelope.
+- Every new_content MUST be a complete, polished sentence that ends with proper punctuation and a complete thought.
+- If a modification from Version 1.0 was already strong, keep it as-is. Do not degrade good work.`;
 
     userPrompt = `ORIGINAL RESUME:\n${resumeText}\n\n${feedbackSection}\n\nPREVIOUS MODIFICATIONS:\n${JSON.stringify(critiqueContext.previousModifications, null, 2)}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nReturn updated JSON now. Remember: your response must start with { and end with }. No preamble.`;
   }
