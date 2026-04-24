@@ -27,6 +27,8 @@ PROPOSED OPTIMIZATION PLAN:
 
 [your detailed bullets here]
 
+IMPORTANT: Discuss ONLY the strategy, what changes to make, and why. DO NOT output the actual resume content or bullet points here. The resume content must be written in the uploaded document only.
+
 Please review this plan and provide your critical feedback."`,
       temperature: 0.7,
     }
@@ -71,7 +73,7 @@ OUTPUT FORMAT (valid JSON only):
   "agents": { "primary": "Gemini 3.1 Pro", "auditor": "DeepSeek-V3.2" },
   "ats": {
     "score": 95,
-    "feedback": "Detailed feedback on the current modifications...",
+    "feedback": "Discuss ONLY the strategy, what changes were made, and why. DO NOT output the actual resume content or bullet points here. The resume content MUST ONLY be in the modifications array.",
     "keywordMatch": ["React", "TypeScript"],
     "missingKeywords": ["AWS"]
   },
@@ -122,12 +124,49 @@ You are formatting for a real Microsoft Word document:
 - Original resume character count (body): ${originalCharCount}
 - Your MAXIMUM allowed total characters across ALL new_content fields: ${maxAllowedChars} (±80 chars max)
 
+ LINE-AWARE BULLET WRITING ALGORITHM (CRITICAL — READ BEFORE WRITING ANY BULLET)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WORD LINE WIDTH: In the target Word document (Calibri 11pt, 0.75" margins), ONE line = 122 visible characters maximum.
+**bold** markers do NOT count — only the text between them counts.
+
+RULE 1 — DEFAULT (MOST BULLETS): Write every bullet to fit within 122 visible characters (1 Word line).
+  Write tight: "&" not "and", "configs" not "configurations", "dept" not "departments", "infra" not "infrastructure".
+  Front-load metrics: "Cut latency 40% via Kafka" not "Reduced the overall latency by approximately 40% using Kafka".
+  SELF-CHECK: Count the visible chars of your new_content. If > 122 → rewrite tighter. Do NOT submit over-length bullets.
+
+RULE 2 — IMPORTANT 2-LINE BULLETS (USE SPARINGLY):
+  If a bullet is genuinely critical for JD matching AND truly cannot fit in 122 chars, it MAY take 2 lines (up to 244 visible chars).
+  BUT it MUST MERGE the content of the NEXT adjacent original bullet into itself, so total line count stays the same.
+
+  HOW TO MERGE — output TWO modifications:
+    Mod A: original_excerpt = first bullet text  → new_content = the merged 2-line bullet (≤244 chars)
+    Mod B: original_excerpt = second bullet text → new_content = "" (empty string — document engine will DELETE this line)
+
+  EXAMPLE:
+    Original bullet 1 (95 chars): "Built ETL pipelines using Python and SQL, processing 50K+ records daily with 30% lower latency."
+    Original bullet 2 (106 chars): "Automated data movement with AWS Lambda, S3 & Terraform, achieving 99% accuracy & 28% less manual effort."
+    
+    Both important for JD. Bullet 1 needs detail → will exceed 122 chars. MERGE:
+    Mod A: original_excerpt = "Built ETL pipelines using Python and SQL, processing 50K+ records daily with 30% lower latency."
+           new_content = "Drove clinical AI insights by building ETL pipelines in Python & SQL processing 50K+ daily records with 30% lower latency, supported by automated AWS Lambda & Terraform data pipelines achieving 99% accuracy & 28% less manual effort."
+    Mod B: original_excerpt = "Automated data movement with AWS Lambda, S3 & Terraform, achieving 99% accuracy & 28% less manual effort."
+           new_content = ""
+
+RULE 3 — LINE COUNT SELF-CHECK (MANDATORY BEFORE OUTPUTTING JSON):
+  For EVERY modification, compute:
+    original_lines = ceil(original_excerpt.length / 122)
+    new_lines = ceil(visible_new_content.length / 122)   (where visible = new_content stripped of ** markers)
+  If new_lines > original_lines → you MUST either condense to ≤122 chars OR merge with adjacent bullet.
+  SUM of all new_lines must be ≤ SUM of all original_lines. Violation = page overflow = HARD FAILURE.
+
 STRICT PER-MODIFICATION LENGTH RULE:
 For EVERY single modification, new_content MUST be within ±5 characters of original_excerpt.
   Example: original_excerpt = 120 chars → new_content must be 115–125 chars.
 This is non-negotiable. It is the only way to guarantee the document stays on the same number of pages.
 If you cannot fit a strong rewrite in that budget: trim filler words, cut adjectives, tighten phrasing.
 Do NOT exceed the budget. Do NOT write shorter than -10 chars either (gaps look bad too).
+EXCEPTION: 2-line merged bullets (Rule 2 above) follow a different budget — they can be up to 244 chars because they absorb the next bullet.
 
 Before outputting JSON:
 1. Draft the full powerful version.
@@ -327,13 +366,21 @@ This is the version the user will actually use. Quality of completeness beats st
 - NEVER output new_content that ends with: "by", "with", "and", "via", "for", "to", "or", "&", "using", "through", "across" — these are ALWAYS wrong.
 - NEVER output new_content where the metric is missing its unit (e.g. "35%" alone — always "35% faster", "35% reduction", "cutting time by 35%").
 
+PAGE OVERFLOW CONDENSING (IF FLAGGED IN FEEDBACK):
+If the auditor feedback contains "CRITICAL PAGE OVERFLOW" or "CONDENSE":
+- Your #1 priority is to FIX the overflow while keeping content quality high.
+- For every bullet > 122 visible characters: REWRITE it to ≤122 chars. Use tighter phrasing, abbreviations ("&", "configs", "infra", "dept"), drop filler words.
+- If a bullet is genuinely critical and CANNOT fit in 122 chars: MERGE it with the next adjacent bullet into a single 2-line statement (≤244 chars) and set the absorbed bullet's new_content to "" (empty string to delete it from the document).
+- NEVER just chop or truncate a sentence — always rewrite intelligently.
+- Run the LINE COUNT SELF-CHECK: for each mod, ceil(new_content_visible_length / 122) must be ≤ ceil(original_excerpt.length / 122).
+
 PREVIOUS AUDITOR FEEDBACK:
 Current Score: ${critiqueContext.currentScore}%
 Feedback: ${critiqueContext.auditorFeedback}
 
 INSTRUCTIONS FOR VERSION 1.1 (FINAL REFINEMENT):
 1. Carefully address every point raised in the feedback.
-2. IF THERE IS A "CRITICAL LAYOUT VIOLATION" IN THE FEEDBACK: You MUST mathematically reduce the length of your 'new_content' to fix it. This is an absolute hard constraint. Do not fail this.
+2. IF THERE IS A "CRITICAL LAYOUT VIOLATION" OR "CRITICAL PAGE OVERFLOW" IN THE FEEDBACK: You MUST mathematically reduce the length of your 'new_content' to fix it. This is an absolute hard constraint. Do not fail this.
 3. Output the COMPLETE updated list of modifications (keep good ones + fix bad ones + add new ones).
 4. Your response MUST start with { and end with }. No preamble, no acknowledgment text. Raw JSON only.
 

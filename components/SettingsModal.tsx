@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AppSettings } from '../types';
 import {
   X, Eye, EyeOff, Settings, Check, Shield,
-  Key, Save, Sparkles, ChevronDown,
+  Key, Save, Sparkles, ChevronDown, Cpu,
 } from 'lucide-react';
 
 interface SettingsModalProps {
@@ -26,6 +26,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
     deepseekApiKey: false,
     geminiApiKey: false,
     claudeApiKey: false,
+    grokApiKey: false,
   });
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [isClosing, setIsClosing] = useState(false);
@@ -218,6 +219,70 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                 </div>
               );
             })}
+          </div>
+
+          {/* ═══════════════════════════════════════════════════════════════════
+              AGENTIC API KEYS — Separate section for quality-gate agents
+              ═══════════════════════════════════════════════════════════════════ */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Cpu className="w-3.5 h-3.5 text-orange-500" />
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Agentic API Keys</span>
+              <div className="flex-1 h-px bg-slate-200 ml-2" />
+            </div>
+
+            {/* Agentic info notice */}
+            <div className="flex items-start gap-2 bg-orange-50 border border-orange-200 rounded-xl p-3">
+              <Cpu className="w-4 h-4 text-orange-500 mt-0.5 flex-shrink-0" />
+              <p className="text-[11px] text-orange-700 leading-relaxed">
+                Agentic models run automatically as quality gates. They are <strong>not</strong> selectable
+                as writer or feedback models — they activate after the final version to catch defects.
+              </p>
+            </div>
+
+            {/* Grok API Key */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-orange-400" />
+                xAI Grok (Quality Gate)
+                {(local.grokApiKey || '') && (
+                  <span className="ml-auto text-[10px] font-medium text-green-500 flex items-center gap-0.5">
+                    <Check className="w-2.5 h-2.5" /> Configured
+                  </span>
+                )}
+              </label>
+              <div className="relative group">
+                <input
+                  type={showKeys.grokApiKey ? 'text' : 'password'}
+                  value={local.grokApiKey || ''}
+                  onChange={e => updateField('grokApiKey', e.target.value)}
+                  placeholder="Enter xAI Grok API key…"
+                  className="w-full px-4 py-3 pr-12 rounded-xl border border-slate-200 bg-slate-50/50 text-sm font-mono text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400 outline-none transition-all"
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  onClick={() => toggleKeyVisibility('grokApiKey')}
+                  className={`absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-md transition-all ${
+                    local.grokApiKey
+                      ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50'
+                      : 'text-slate-300 cursor-default'
+                  }`}
+                  disabled={!local.grokApiKey}
+                  title={showKeys.grokApiKey ? 'Hide API key' : 'Show API key'}
+                >
+                  {showKeys.grokApiKey ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+              <p className="mt-1.5 text-[10px] text-slate-400 leading-relaxed">
+                Grok reviews the final document after V1.1 for incomplete sentences, cutoffs & dangling phrases.
+                Uses <span className="font-mono text-orange-500">grok-4-1-fast-reasoning</span> model.
+              </p>
+            </div>
           </div>
         </div>
 

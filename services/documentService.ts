@@ -155,230 +155,13 @@ const cleanNewContent = (text: string): string => {
   return result.trim();
 };
 
-/**
- * Soft-cap new_content to the original paragraph length + small tolerance.
- *
- * Budget stays TIGHT (+5 chars) to preserve the exact line structure of the
- * resume — every bullet must occupy the same number of lines as the original.
- * The GLOBAL enforcer in App.tsx handles overall page budget too.
- *
- * When trimming IS required, we trim INTELLIGENTLY instead of chopping at
- * a dumb word boundary:
- *   0. (NEW) Try to COMPRESS the full text by removing filler words — this
- *      preserves the trailing metric (e.g. "by 35%") that matters most.
- *   1. Try to find the last complete sentence (period).
- *   2. Try to find the last complete clause (semicolon).
- *   3. Cut at word boundary, then strip dangling prepositions/conjunctions
- *      ("by", "via", "with", "and", etc.) that make no sense alone.
- *   4. Strip trailing commas/colons (incomplete lists).
- *   5. Always ensure proper punctuation at the end.
- *
- * **bold** markers are stripped before measuring — they add no page space.
- */
-const DANGLING_WORDS = /\s+(by|via|with|and|or|for|to|in|of|the|a|an|as|at|on|into|from|using|through|across|than|&)\s*$/i;
-
-/** Common filler phrases that can be compressed without losing meaning. */
-const FILLER_COMPRESSIONS: [RegExp, string][] = [
-  [/\bin order to\b/gi,       'to'],
-  [/\butilized\b/gi,          'used'],
-  [/\bimplemented\b/gi,       'built'],
-  [/\bconfigurations\b/gi,    'configs'],
-  [/\binfrastructure\b/gi,    'infra'],
-  [/\bapproximately\b/gi,     '~'],
-  [/\benvironment\b/gi,       'env'],
-  [/\bdepartments\b/gi,       'depts'],
-  [/\bapplication\b/gi,       'app'],
-  [/\boptimization\b/gi,      'optim.'],
-  [/\band\b/gi,               '&'],
-  [/\s{2,}/g,                 ' '],             // collapse double spaces
-];
-
-const enforceLengthBudget = (original: string, newText: string, isFinalRound = false): string => {
-  const visibleLength = (text: string) => text.replace(/\*\*([^*]+)\*\*/g, '$1').length;
-  const measuredLength = visibleLength(newText);
-
-  // Single-line bullets (< 122 chars) can expand up to the full Word line width.
-  // Multi-line content (≥ 122 chars) keeps the tight +5 budget to preserve line count.
-  const WORD_LINE_MAX = 122; // Calibri 11pt, 0.75" margins, experience section
-  const isMultiLine = original.length >= WORD_LINE_MAX;
-
-  const baseMax = isMultiLine
-    ? original.length + 5   // multi-line: tight budget preserves page layout
-    : WORD_LINE_MAX;         // single-line: fill the whole line — no wasted space
-
-  // Final round: +3 extra for multi-line (total +8). Single-line is already at WORD_LINE_MAX.
-  // +8 total ≈ 1 short word — safe, won't cause line wrap in Calibri 11pt.
-  const maxChars = (isFinalRound && isMultiLine) ? original.length + 8 : baseMax;
-
-  // Hard ceiling — NEVER exceed this regardless of any logic below.
-  // For multi-line: max +10. For single-line: WORD_LINE_MAX (already the ceiling).
-  const HARD_CAP = isMultiLine ? original.length + 10 : WORD_LINE_MAX;
-
-  if (measuredLength <= maxChars) return newText;
-
-  /**
-   * Helper: Substring the bold-included text by counting only visible characters.
-   * Returns properly closed bold markers.
-   */
-  const substringByVisible = (text: string, visibleLen: number): string => {
-    let visible = 0;
-    let pos = 0;
-    while (pos < text.length && visible < visibleLen) {
-      if (text[pos] === '*' && text[pos + 1] === '*') {
-        pos += 2; // skip bold marker
-        continue;
-      }
-      visible++;
-      pos++;
-    }
-    let result = text.substring(0, pos);
-    // Close any unclosed bold markers
-    const openBolds = (result.match(/\*\*/g) || []).length;
-    if (openBolds % 2 !== 0) result += '**';
-    return result;
-  };
-
-  // ── Strategy 0: Compress filler to preserve the metric at the end ───────
-  // Apply compressions to the original text WITH bold markers preserved.
-  let compressed = newText;
-  for (const [pattern, replacement] of FILLER_COMPRESSIONS) {
-    if (compressed.replace(/\*\*([^*]+)\*\*/g, '$1').length <= maxChars) break;
-    compressed = compressed.replace(pattern, replacement);
-  }
-  compressed = compressed.replace(/\s{2,}/g, ' ').trim();
-  const compressedVisible = compressed.replace(/\*\*([^*]+)\*\*/g, '$1');
-  if (compressedVisible.length <= maxChars && /[.!?%)"]$/.test(compressedVisible)) {
-    return compressed;
-  }
-
-  // ── Strategy 0.5 (Final round): Front-only word removal ────────────────
-  // Instead of cutting from the back (which kills metrics), remove words
-  // from the opening action phrase. The ending 25% of the bullet is sacred.
-  if (isFinalRound) {
-    const compStripped = compressedVisible; // already filler-compressed
-    const protectLen = Math.max(20, Math.floor(compStripped.length * 0.25));
-    const endingSlice = compStripped.slice(-protectLen);
-    const endingHasValue = /\d+%|\d+[MBK]\+?|\$\d/i.test(endingSlice) ||
-                           /[.!?%)"]\s*$/.test(compStripped);
-
-    if (endingHasValue && !DANGLING_WORDS.test(compStripped)) {
-      // Try progressively removing words/clauses from the front of compressed text
-      let frontStripped = compStripped;
-      for (let attempt = 0; attempt < 6; attempt++) {
-        if (frontStripped.length <= maxChars) break;
-
-        // Prefer removing a front clause (up to first comma)
-        const commaPos = frontStripped.indexOf(', ');
-        const spacePos = frontStripped.indexOf(' ', 1);
-
-        if (commaPos > 0 && commaPos < frontStripped.length * 0.4) {
-          frontStripped = frontStripped.slice(commaPos + 2);
-        } else if (spacePos > 0) {
-          frontStripped = frontStripped.slice(spacePos + 1);
-        } else {
-          break;
-        }
-      }
-
-      // Validate: still a meaningful sentence, within budget, and ending intact
-      if (frontStripped.length <= HARD_CAP &&
-          frontStripped.length >= compStripped.length * 0.55 &&
-          frontStripped.slice(-protectLen) === endingSlice &&
-          /[.!?%)"]$/.test(frontStripped)) {
-        // Rebuild with bold markers from compressed version
-        // Since we trimmed from the front of the visible text, we need to
-        // find where the kept portion starts in the bold-marker version
-        const cutLen = compStripped.length - frontStripped.length;
-        // Advance past cutLen visible chars in the compressed (bold) string
-        let vCount = 0, bPos = 0;
-        while (bPos < compressed.length && vCount < cutLen) {
-          if (compressed[bPos] === '*' && compressed[bPos + 1] === '*') {
-            bPos += 2; continue;
-          }
-          vCount++; bPos++;
-        }
-        const frontTrimmedBold = compressed.substring(bPos).trim();
-        if (visibleLength(frontTrimmedBold) <= HARD_CAP) {
-          console.log(`[FinalRound] Front-trimmed: removed ${cutLen} chars from opening`);
-          return frontTrimmedBold;
-        }
-      }
-    }
-  }
-
-  // For strategies 1-3, work on visible text but map positions back to bold-included text.
-  const stripped = newText.replace(/\*\*([^*]+)\*\*/g, '$1');
-  const hardCut  = stripped.substring(0, maxChars);
-
-  // ── Strategy 1: Find the last complete sentence (ends with period) ──────
-  const lastPeriod = Math.max(
-    hardCut.lastIndexOf('. '),
-    hardCut.lastIndexOf('.\n'),
-    hardCut.endsWith('.') ? hardCut.length - 1 : -1
-  );
-  if (lastPeriod > maxChars * 0.55) {
-    return substringByVisible(newText, lastPeriod + 1).trim();
-  }
-
-  // ── Strategy 2: Find the last complete clause (semicolon) ───────────────
-  const lastSemicolon = hardCut.lastIndexOf('; ');
-  if (lastSemicolon > maxChars * 0.55) {
-    return substringByVisible(newText, lastSemicolon + 1).trim() + '.';
-  }
-
-  // ── Strategy 3: Cut at word boundary then clean up dangling words ───────
-  let trimmedVisible = hardCut;
-  const lastSpace = trimmedVisible.lastIndexOf(' ');
-  if (lastSpace > maxChars * 0.4) {
-    trimmedVisible = trimmedVisible.substring(0, lastSpace).trim();
-  }
-
-  // Remove dangling prepositions/conjunctions (multiple passes if stacked)
-  let passes = 0;
-  while (DANGLING_WORDS.test(trimmedVisible) && passes < 5) {
-    trimmedVisible = trimmedVisible.replace(DANGLING_WORDS, '').trim();
-    passes++;
-  }
-
-  // Remove trailing comma, colon, or ampersand (incomplete clause)
-  trimmedVisible = trimmedVisible.replace(/[,;:&]\s*$/, '').trim();
-
-  // Rebuild with bold markers preserved up to trimmedVisible length
-  let result = substringByVisible(newText, trimmedVisible.length).trim();
-
-  // Clean trailing punctuation on the bold-included result
-  result = result.replace(/[,;:&]\s*$/, '').trim();
-
-  // Ensure the text ends with proper punctuation
-  const resultVisible = result.replace(/\*\*([^*]+)\*\*/g, '$1');
-  if (resultVisible && !/[.!?%)"]$/.test(resultVisible)) {
-    result += '.';
-  }
-
-  // ── Final-round safety net: if strategies 1-3 destroyed the metric, ────
-  // prefer the filler-compressed version IF it's a complete sentence
-  // AND within the hard cap. Never return text exceeding HARD_CAP.
-  if (isFinalRound) {
-    const finalResultVisible = result.replace(/\*\*([^*]+)\*\*/g, '$1');
-    const origNewVisible = newText.replace(/\*\*([^*]+)\*\*/g, '$1');
-
-    const origLast20 = origNewVisible.slice(-20);
-    const resultLast20 = finalResultVisible.slice(-20);
-    const origHadMetric = /\d+%|\d+[MBK]\+?|\$\d/i.test(origLast20);
-    const resultLostMetric = origHadMetric && !/\d+%|\d+[MBK]\+?|\$\d/i.test(resultLast20);
-
-    if (resultLostMetric) {
-      // Prefer compressed version if it's complete AND within hard cap
-      if (compressedVisible.length <= HARD_CAP && /[.!?%)"]$/.test(compressedVisible)) {
-        console.log(`[FinalRound] Used compressed version to preserve metric (${compressedVisible.length} chars)`);
-        return compressed;
-      }
-      // Otherwise keep the trimmed result — don't bypass the budget
-    }
-  }
-
-  return result;
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTE: No enforceLengthBudget / trimming here.
+// The AI models are instructed to write bullets within 122 chars (1 Word line)
+// or merge adjacent bullets when a 2-line bullet is justified.
+// If the page overflows, App.tsx detects it and asks the AI to condense —
+// the document engine never silently truncates content.
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Core XML namespace constants
@@ -654,8 +437,9 @@ const applyReplacement = (
   newText: string,
   isFinalRound = false
 ): void => {
-  const budgeted  = enforceLengthBudget(originalText, newText, isFinalRound);
-  const finalText = cleanNewContent(budgeted);
+  // No trimming — AI is responsible for writing within line limits.
+  // The document engine applies content as-is from the AI.
+  const finalText = cleanNewContent(newText);
 
   // ── Gather ALL direct children that are content (runs OR hyperlinks) ─────
   // We skip <w:pPr> (paragraph properties) and other non-content elements.
@@ -1016,6 +800,30 @@ const applyModsToXml = (
     const original   = (mod.original_excerpt || '').trim();
     const newContent = mod.new_content || '';
     if (!original || original.length < 8) continue;
+
+    // ── PARAGRAPH DELETION: empty new_content means this bullet was merged/absorbed ──
+    // The AI sets new_content = "" when it merges two bullets into one.
+    // We remove the entire paragraph from the XML so it doesn't leave a blank line.
+    if (newContent.trim() === '') {
+      const searchNorm = normalizeForMatch(original);
+      for (const p of paragraphs) {
+        const pt = normalizeForMatch(p.textContent || '');
+        if (pt.includes(searchNorm)) {
+          if (isContactLine(p)) break; // never delete contact lines
+          const parent = p.parentNode;
+          if (parent) {
+            parent.removeChild(p);
+            // Remove from our working array so later mods don't reference it
+            const idx = paragraphs.indexOf(p);
+            if (idx >= 0) paragraphs.splice(idx, 1);
+            applied++;
+            console.log(`[DocEngine] Deleted absorbed paragraph: "${original.substring(0, 50)}…"`);
+          }
+          break;
+        }
+      }
+      continue; // skip normal replacement flow
+    }
 
     const searchNorm = normalizeForMatch(original);
     let found = false;

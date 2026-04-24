@@ -102,6 +102,8 @@ PROPOSED OPTIMIZATION PLAN:
 
 [your detailed bullets here]
 
+IMPORTANT: Discuss ONLY the strategy, what changes to make, and why. DO NOT output the actual resume content or bullet points here. The resume content must be written in the uploaded document only.
+
 Please review this plan and provide your critical feedback."`;
 
   const result = await callClaude(
@@ -212,6 +214,59 @@ When rewriting the professional title, new_content = title text only, same lengt
 - Quantify achievements where metrics are implied but not stated
 - Tighten wordiness — every word must earn its place
 - Match the JD's exact terminology for tools, frameworks, and skills
+
+KEYWORD INTEGRATION vs. KEYWORD STUFFING — CRITICAL DISTINCTION
+
+You are writing for TWO audiences simultaneously: an ATS bot AND a human hiring manager.
+Passing ATS while failing the human reader is a failed resume. Both must be satisfied.
+
+THE GOLDEN RULE: Every bullet you write must be rooted in the candidate's REAL experience.
+Keywords from the JD are ingredients — not sentences. You extract the concept, then build
+a bullet FROM the candidate's actual work that demonstrates that concept.
+
+❌ FORBIDDEN — Never do this:
+- Copy a phrase from the JD and paste it into a bullet verbatim
+- Mirror the JD's sentence structure inside a resume bullet
+- Use the same unusual or specific phrasing the JD uses (e.g. if JD says "customer-centric
+  products", do NOT write "developed customer-centric products" — a human will immediately
+  recognize this as lifted text)
+- Repeat the same keyword phrase across multiple different job roles
+
+✅ REQUIRED — Always do this:
+- Read the candidate's bullet. Understand what they ACTUALLY did.
+- Identify which JD requirement that experience genuinely maps to.
+- Rewrite the bullet to highlight that mapping using the candidate's OWN context,
+  tools, and outcomes — with the JD keyword woven in naturally.
+- The keyword should feel like it belongs in the sentence, not like it was inserted.
+
+TRANSLATION PRINCIPLE:
+  JD says:        "customer-centric product development"
+  Candidate did:  built internal dashboards for ops team
+  
+  ❌ BAD: "Developed customer-centric products for operational stakeholders."
+           → Lifted phrase, no real context, hollow to a human reader.
+  
+  ✅ GOOD: "Built self-serve ops dashboards adopted by 3 teams, reducing analyst dependency by 40%."
+            → Real work, real impact, human-readable. ATS picks up "product", "stakeholder", "delivery".
+
+  JD says:        "analyzed existing software to identify areas of improvement"  
+  Candidate did:  refactored a legacy ETL pipeline
+
+  ❌ BAD: "Analyzed existing software to identify areas of improvement in ETL workflows."
+           → Verbatim JD copy. A recruiter will recognize this instantly.
+
+  ✅ GOOD: "Refactored legacy ETL pipeline, eliminating 3 bottlenecks and cutting runtime by 28%."
+            → Same concept, candidate's real context, quantified, natural.
+
+VARIETY RULE:
+- The same keyword must NEVER appear with the same phrasing in more than one job role.
+- If a concept (e.g. "cross-functional collaboration") applies to multiple roles,
+  express it differently in each — different verb, different context, different metric.
+
+FINAL HUMAN-READER TEST:
+Before finalizing any bullet, ask: "Would a senior engineer at this company read this
+and believe the candidate actually did this — or would they think it was written by an AI
+copying the job description?" If the answer is the latter, rewrite it.
 
  METRIC WRITING DISCIPLINE (CRITICAL)
 
@@ -344,6 +399,25 @@ EXAMPLE 7 — Sentence ends mid-clause after a keyword injection:
 
   HOW TO FIX: When a keyword injection pushes you over, remove a different word — never the ending noun.
 
+⚠️ FORMATTING STILL APPLIES — NO EXCEPTIONS:
+The keyword translation above does NOT give you license to rewrite freely.
+Every new_content MUST still be within ±5 characters of its original_excerpt.
+The character budget is the hard constraint. The keyword integration rule tells
+you HOW to think about the content — the budget tells you HOW LONG it can be.
+
+PROCESS ORDER (always follow this):
+  STEP 1: Understand what the candidate ACTUALLY did (their original bullet)
+  STEP 2: Identify which JD concept it maps to
+  STEP 3: Draft an authentic rewrite that expresses that concept naturally
+  STEP 4: Count characters — trim the OPENING phrase until within ±5 of original
+  STEP 5: Human-reader test — does this sound real, or like copied JD text?
+  Only if ALL 5 steps pass → output the new_content.
+
+Both rules are non-negotiable and must be satisfied simultaneously.
+A perfectly authentic bullet that is 20 chars over budget = FAIL.
+A perfectly sized bullet that copies JD phrasing = FAIL.
+Only a bullet that passes BOTH tests is acceptable output.
+
 
 FINAL CHECKLIST — before outputting any new_content, ask yourself:
   ✅ Does this sentence end with a complete thought?
@@ -360,7 +434,7 @@ OUTPUT FORMAT — valid JSON only, no other text
   "agents": { "primary": "Claude Sonnet 4.6", "auditor": "ATS Auditor" },
   "ats": {
     "score": 95,
-    "feedback": "Specific feedback on this version...",
+    "feedback": "Discuss ONLY the strategy, what changes were made, and why. DO NOT output the actual resume content or bullet points here. The resume content MUST ONLY be in the modifications array.",
     "keywordMatch": ["keyword1", "keyword2"],
     "missingKeywords": ["keyword3"]
   },

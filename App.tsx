@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Step, TailoredResumeData, AppSettings } from './types';
 import FileUpload from './components/FileUpload';
 import ResumePreview from './components/ResumePreview';
+import SmoothDocumentPreview from './components/SmoothDocumentPreview';
 import SettingsModal from './components/SettingsModal';
 import { tailorResumeOpenAI, createOptimizationPlan } from './services/openaiService';
 import { tailorResumeDeepSeek, createOptimizationPlanDeepSeek } from './services/deepseekService';
@@ -296,6 +297,7 @@ const App: React.FC = () => {
   const [error, setError]                       = useState<string | null>(null);
 
   const [liveDocBuffer, setLiveDocBuffer]       = useState<ArrayBuffer | null>(null);
+  const [liveModifications, setLiveModifications] = useState<any[]>([]);
   const [isDocUpdating, setIsDocUpdating]       = useState(false);
 
   const [agentLogs, setAgentLogs] = useState<Array<{ id: string; agent: string; message: string; ts: Date }>>([]);
@@ -396,22 +398,31 @@ const App: React.FC = () => {
     if (!originalFileBuffer || !mods?.length) return;
     setTotalModCount(mods.length);
     setAppliedModCount(0);
+    setLiveModifications([]);
 
     for (let i = 0; i < mods.length; i++) {
       if (cancelRef.current) break;
       const subset = mods.slice(0, i + 1);
-      setIsDocUpdating(true);
-      try {
-        const newBuf = await applyModificationsToBuffer(originalFileBuffer.slice(0), subset);
-        setLiveDocBuffer(newBuf);
-        setAppliedModCount(i + 1);
-      } catch (e) {
-        console.error(`Mod ${i + 1} apply failed:`, e);
-      } finally {
-        setIsDocUpdating(false);
-      }
-      // Small delay between each mod so user can see the change
-      await new Promise(r => setTimeout(r, 600));
+      
+      setLiveModifications(subset);
+      setAppliedModCount(i + 1);
+      
+      // Calculate delay based on length to simulate typing
+      const newContentLen = mods[i].new_content.length;
+      const delay = Math.min(Math.max(newContentLen * 15, 400), 2500);
+      await new Promise(r => setTimeout(r, delay));
+    }
+    
+    // After all mods are applied visually, update the actual DOCX buffer
+    setIsDocUpdating(true);
+    try {
+      const newBuf = await applyModificationsToBuffer(originalFileBuffer.slice(0), mods);
+      setLiveDocBuffer(newBuf);
+      setLiveModifications([]); // Switch back to DocxPreviewPane
+    } catch (e) {
+      console.error(`Final mod apply failed:`, e);
+    } finally {
+      setIsDocUpdating(false);
     }
   };
 
@@ -441,138 +452,23 @@ const App: React.FC = () => {
     return draft;
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Page-overflow DETECTION (no trimming — AI handles condensing)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const WORD_LINE_MAX = 122; // Calibri 11pt, 0.75" margins — 1 Word line
+
   /**
-   * Intelligent trimming helper for enforcePageLimit.
-   * Mirrors the sentence-aware logic from enforceLengthBudget in documentService.ts.
+   * Detects whether the modified resume exceeds the original's character/line
+   * count and generates targeted AI feedback identifying which bullets overflow.
    *
-   * KEY FIXES vs the old implementation:
-   *   1. Works on the ORIGINAL new_content (with **bold** markers intact).
-   *   2. Measures character length WITHOUT bold markers but preserves them in output.
-   *   3. Uses sentence-aware cutting (period, semicolon) instead of dumb substring.
-   *   4. Strips dangling prepositions/conjunctions.
-   *   5. Ensures proper punctuation at the end.
+   * This does NOT trim anything — it produces a feedback string that gets
+   * sent back to the primary AI so it can intelligently condense or merge bullets.
    */
-  const DANGLING_TAIL = /\s+(by|via|with|and|or|for|to|in|of|the|a|an|as|at|on|into|from|using|through|across|than|&)\s*$/i;
-
-  const smartTrim = (text: string, maxVisibleChars: number): string => {
-    // Measure visible length (without bold markers)
-    const visibleText = text.replace(/\*\*([^*]+)\*\*/g, '$1');
-    if (visibleText.length <= maxVisibleChars) return text;
-
-    // To trim text-with-bold-markers we need to walk through the original text,
-    // counting only visible characters, and cut at the right position.
-    let visibleCount = 0;
-    let cutPos = text.length;
-    let inBold = false;
-    for (let i = 0; i < text.length; i++) {
-      // Detect ** bold markers
-      if (text[i] === '*' && text[i + 1] === '*') {
-        inBold = !inBold;
-        i++; // skip second *
-        continue;
-      }
-      visibleCount++;
-      if (visibleCount >= maxVisibleChars) {
-        cutPos = i + 1;
-        break;
-      }
-    }
-
-    let hardCut = text.substring(0, cutPos);
-    // Close any unclosed bold markers
-    const openBolds = (hardCut.match(/\*\*/g) || []).length;
-    if (openBolds % 2 !== 0) hardCut += '**';
-
-    const stripped = hardCut.replace(/\*\*([^*]+)\*\*/g, '$1');
-
-    // Strategy 1: Find last complete sentence (period)
-    const lastPeriod = Math.max(
-      stripped.lastIndexOf('. '),
-      stripped.lastIndexOf('.\n'),
-      stripped.endsWith('.') ? stripped.length - 1 : -1
-    );
-    if (lastPeriod > maxVisibleChars * 0.55) {
-      const sentenceEnd = stripped.substring(0, lastPeriod + 1).trim();
-      return rebuildWithBold(text, sentenceEnd.length);
-    }
-
-    // Strategy 2: Find last clause (semicolon)
-    const lastSemicolon = stripped.lastIndexOf('; ');
-    if (lastSemicolon > maxVisibleChars * 0.55) {
-      const clauseEnd = stripped.substring(0, lastSemicolon + 1).trim() + '.';
-      return rebuildWithBold(text, lastSemicolon + 1) + '.';
-    }
-
-    // Strategy 3: Cut at word boundary + clean dangling words
-    let result = hardCut;
-    const lastSpace = stripped.lastIndexOf(' ');
-    if (lastSpace > maxVisibleChars * 0.4) {
-      result = rebuildWithBold(text, lastSpace);
-    }
-
-    // Remove dangling prepositions/conjunctions (multiple passes)
-    let plain = result.replace(/\*\*([^*]+)\*\*/g, '$1');
-    let passes = 0;
-    while (DANGLING_TAIL.test(plain) && passes < 5) {
-      plain = plain.replace(DANGLING_TAIL, '').trim();
-      passes++;
-    }
-    if (passes > 0) {
-      result = rebuildWithBold(text, plain.length);
-    }
-
-    // Remove trailing comma, colon, or ampersand
-    result = result.replace(/[,;:&]\s*$/, '').trim();
-
-    // Ensure proper punctuation
-    const finalPlain = result.replace(/\*\*([^*]+)\*\*/g, '$1');
-    if (finalPlain && !/[.!?%)"]$/.test(finalPlain)) {
-      result += '.';
-    }
-
-    // ── Safety net: if trimming destroyed a metric, try to salvage ──────
-    // Instead of bypassing the budget entirely, only prefer the original
-    // if it's within a tight tolerance of the target length.
-    const origLast25 = visibleText.slice(-25);
-    const resultLast25 = result.replace(/\*\*([^*]+)\*\*/g, '$1').slice(-25);
-    const origHadMetric = /\d+%|\d+[MBK]\+?|\$\d/i.test(origLast25);
-    const resultLostMetric = origHadMetric && !/\d+%|\d+[MBK]\+?|\$\d/i.test(resultLast25);
-    if (resultLostMetric && visibleText.length <= maxVisibleChars + 10) {
-      // Original is only slightly over the target — safe to keep
-      console.log(`[smartTrim] Kept original to preserve metric (${visibleText.length}/${maxVisibleChars} chars)`);
-      return text;
-    }
-
-    return result;
-  };
-
-  /**
-   * Rebuild the original text (with bold markers) up to `visibleLen` visible characters.
-   * Ensures bold markers are properly closed.
-   */
-  const rebuildWithBold = (original: string, visibleLen: number): string => {
-    let visible = 0;
-    let pos = 0;
-    let inBold = false;
-
-    while (pos < original.length && visible < visibleLen) {
-      if (original[pos] === '*' && original[pos + 1] === '*') {
-        inBold = !inBold;
-        pos += 2;
-        continue;
-      }
-      visible++;
-      pos++;
-    }
-
-    let result = original.substring(0, pos).trim();
-    // Close any unclosed bold markers
-    const openBolds = (result.match(/\*\*/g) || []).length;
-    if (openBolds % 2 !== 0) result += '**';
-    return result;
-  };
-
-  const enforcePageLimit = (data: TailoredResumeData, originalText: string): TailoredResumeData => {
+  const detectPageOverflow = (
+    data: TailoredResumeData,
+    originalText: string
+  ): { isOverflowing: boolean; overByChars: number; overByLines: number; feedback: string } => {
     const originalLines = originalText.split('\n').length;
     const originalChars = originalText.length;
 
@@ -580,57 +476,120 @@ const App: React.FC = () => {
     const currentLines = draft.split('\n').length;
     const currentChars = draft.length;
 
-    if (currentLines <= originalLines && currentChars <= originalChars) {
+    const overByChars = Math.max(0, currentChars - originalChars);
+    const overByLines = Math.max(0, currentLines - originalLines);
+
+    if (overByChars <= 0 && overByLines <= 0) {
       addLog('SYSTEM', `✅ Page fit perfect (${currentLines}/${originalLines} lines)`);
-      return data;
+      return { isOverflowing: false, overByChars: 0, overByLines: 0, feedback: '' };
     }
 
-    const overByChars = currentChars - originalChars;
-    addLog('SYSTEM', `🔒 Page overflow by ~${overByChars} chars / ${currentLines - originalLines} lines. Surgical trim…`);
+    // Identify which bullets are overflowing their original line count
+    const mods = data.modifications ?? [];
+    const overflowingBullets: string[] = [];
+    const expandedBullets: string[] = [];
 
-    let mods = (data.modifications ?? []).map(m => ({ ...m }));
+    for (const mod of mods) {
+      const origLen = (mod.original_excerpt || '').length;
+      const newVisible = (mod.new_content || '').replace(/\*\*([^*]+)\*\*/g, '$1').length;
+      if (newVisible === 0) continue; // absorbed bullet — already deleted
+      const origWordLines = Math.ceil(Math.max(origLen, 1) / WORD_LINE_MAX);
+      const newWordLines  = Math.ceil(Math.max(newVisible, 1) / WORD_LINE_MAX);
 
-    const byGrowth = [...mods]
-      .map((m, i) => ({
-        idx: i,
-        growth: (m.new_content?.replace(/\*\*([^*]+)\*\*/g, '$1').length ?? 0)
-               - (m.original_excerpt?.length ?? 0),
-      }))
-      .filter(x => x.growth > 0)
-      .sort((a, b) => b.growth - a.growth);
-
-    let remaining = overByChars;
-    for (const { idx } of byGrowth) {
-      if (remaining <= 0) break;
-      const mod      = mods[idx];
-      const origLen  = (mod.original_excerpt || '').length;
-      const currentVisibleLen = (mod.new_content || '').replace(/\*\*([^*]+)\*\*/g, '$1').length;
-      const growth   = currentVisibleLen - origLen;
-
-      if (growth <= 0) continue;
-
-      // Try to trim intelligently first — preserve the improvement if possible
-      const targetLen = Math.max(origLen, 50);
-      const trimmed = smartTrim(mod.new_content || '', targetLen);
-      const trimmedVisibleLen = trimmed.replace(/\*\*([^*]+)\*\*/g, '$1').length;
-      const saved = currentVisibleLen - trimmedVisibleLen;
-
-      if (saved > 0) {
-        remaining -= saved;
-        mods[idx] = { ...mod, new_content: trimmed };
-        addLog('SYSTEM', `✂️ Trimmed 1 modification to fit page (saved ${saved} chars)`);
-      } else {
-        // smartTrim couldn't reduce it — only then revert as last resort
-        remaining -= growth;
-        mods[idx] = { ...mod, new_content: mod.original_excerpt || '' };
-        addLog('SYSTEM', `↩️ Reverted 1 modification — couldn't trim enough (saved ${growth} chars)`);
+      if (newWordLines > origWordLines) {
+        overflowingBullets.push(
+          `- "${(mod.new_content || '').substring(0, 80)}…" → ${newVisible} chars (${newWordLines} lines, was ${origWordLines})`
+        );
+      }
+      if (newVisible > origLen + 10) {
+        expandedBullets.push(
+          `- "${(mod.new_content || '').substring(0, 60)}…" grew by +${newVisible - origLen} chars`
+        );
       }
     }
 
-    const finalDraft = constructDraft(originalText, mods);
-    const finalLines = finalDraft.split('\n').length;
-    addLog('SYSTEM', `✅ Page fit after trim: ${finalLines}/${originalLines} lines (trimmed ${overByChars - Math.max(0, remaining)} chars)`);
-    return { ...data, modifications: mods };
+    let feedback = `CRITICAL PAGE OVERFLOW DETECTED — YOU MUST FIX THIS\n`;
+    feedback += `The resume overflows by ~${overByChars} chars / ${overByLines} extra lines. It will spill to page 3.\n\n`;
+
+    if (overflowingBullets.length > 0) {
+      feedback += `BULLETS TAKING MORE LINES THAN THE ORIGINAL (fix these first):\n`;
+      feedback += overflowingBullets.join('\n') + '\n\n';
+    }
+
+    if (expandedBullets.length > 0) {
+      feedback += `BULLETS THAT GREW SIGNIFICANTLY:\n`;
+      feedback += expandedBullets.join('\n') + '\n\n';
+    }
+
+    feedback += `MANDATORY ACTIONS:\n`;
+    feedback += `1. Every bullet that exceeds 122 visible characters (1 Word line) MUST be condensed to ≤122 chars — write tighter, use "&" not "and", drop filler words.\n`;
+    feedback += `2. If a bullet MUST stay at 2 lines because it is critical for JD matching, MERGE it with the next adjacent bullet: combine both into one 2-line statement (≤244 chars) and set the absorbed bullet's new_content to "" (empty string — the document engine will delete that line).\n`;
+    feedback += `3. Preserve all metrics and key achievements — condense the opening action phrase, not the ending.\n`;
+    feedback += `4. The total line count across ALL modifications MUST equal or be LESS than the original resume's line count (${originalLines} lines).\n`;
+    feedback += `5. For each modification, verify: ceil(new_content_length / 122) ≤ ceil(original_excerpt_length / 122).\n`;
+
+    addLog('SYSTEM', `⚠️ Page overflow: +${overByChars} chars / +${overByLines} lines. ${overflowingBullets.length} bullets exceed their line budget.`);
+    return { isOverflowing: true, overByChars, overByLines, feedback };
+  };
+
+  /**
+   * Merge V1.x modifications back to the real .docx original_excerpts.
+   * Reusable helper used after any AI refinement pass (v1.1, condensing, etc.)
+   */
+  const mergeModifications = (prevMods: any[], newMods: any[]): any[] => {
+    const normalizeKey = (s: string) => (s || '').replace(/\*\*([^*]+)\*\*/g, '$1').trim().toLowerCase();
+
+    const prevByNewContent = new Map<string, (typeof prevMods)[0]>();
+    for (const m of prevMods) {
+      const key = normalizeKey(m.new_content || '');
+      if (key) prevByNewContent.set(key, m);
+    }
+
+    const prevByOriginal = new Map<string, (typeof prevMods)[0]>();
+    for (const m of prevMods) {
+      const key = normalizeKey(m.original_excerpt || '');
+      if (key) prevByOriginal.set(key, m);
+    }
+
+    const merged: typeof prevMods = [];
+    const usedPrevKeys = new Set<string>();
+
+    for (const newMod of newMods) {
+      const excerptKey = normalizeKey(newMod.original_excerpt || '');
+
+      // Case A: new mod's original_excerpt matches a prev mod's new_content
+      // → The AI refined prev output → remap to prev's original_excerpt
+      const matchByNew = prevByNewContent.get(excerptKey);
+      if (matchByNew) {
+        merged.push({
+          ...newMod,
+          original_excerpt: matchByNew.original_excerpt, // points to real .docx text
+        });
+        usedPrevKeys.add(normalizeKey(matchByNew.original_excerpt || ''));
+        continue;
+      }
+
+      // Case B: new mod's original_excerpt matches a prev mod's original_excerpt
+      const matchByOrig = prevByOriginal.get(excerptKey);
+      if (matchByOrig) {
+        merged.push(newMod);
+        usedPrevKeys.add(excerptKey);
+        continue;
+      }
+
+      // Case C: Brand new mod
+      merged.push(newMod);
+    }
+
+    // Carry forward prev mods that the new pass didn't touch
+    for (const m of prevMods) {
+      const key = normalizeKey(m.original_excerpt || '');
+      if (!usedPrevKeys.has(key)) {
+        merged.push(m);
+      }
+    }
+
+    return merged;
   };
 
   // ── withRetry now supports model switching on error ──
@@ -872,69 +831,12 @@ const App: React.FC = () => {
 
       if (finalData.modifications?.length > 0) {
         // ── Merge V1.1 into V1.0: remap original_excerpt to match the real .docx ──
-        // V1.1's original_excerpt often references V1.0's new_content (the modified text),
-        // but applyModificationsToBuffer always runs against the ORIGINAL untouched buffer.
-        // So we need to translate V1.1's excerpt back to what actually exists in the .docx.
         const v1Mods   = data.modifications ?? [];
         const v1_1Mods = finalData.modifications;
-
-        // Index V1.0 mods by their new_content (normalized) so we can match when
-        // V1.1 uses V1.0's output as its original_excerpt
-        const normalizeKey = (s: string) => (s || '').replace(/\*\*([^*]+)\*\*/g, '$1').trim().toLowerCase();
-
-        const v1ByNewContent = new Map<string, typeof v1Mods[0]>();
-        for (const m of v1Mods) {
-          const key = normalizeKey(m.new_content || '');
-          if (key) v1ByNewContent.set(key, m);
-        }
-
-        const v1ByOriginal = new Map<string, typeof v1Mods[0]>();
-        for (const m of v1Mods) {
-          const key = normalizeKey(m.original_excerpt || '');
-          if (key) v1ByOriginal.set(key, m);
-        }
-
-        const merged: typeof v1Mods = [];
-        const usedV1Keys = new Set<string>();
-
-        for (const v11Mod of v1_1Mods) {
-          const excerptKey = normalizeKey(v11Mod.original_excerpt || '');
-
-          // Case A: V1.1's original_excerpt matches a V1.0's new_content
-          // → The AI refined V1.0's output → remap to V1.0's original_excerpt
-          const matchByNew = v1ByNewContent.get(excerptKey);
-          if (matchByNew) {
-            merged.push({
-              ...v11Mod,
-              original_excerpt: matchByNew.original_excerpt, // ← points to real .docx text
-            });
-            usedV1Keys.add(normalizeKey(matchByNew.original_excerpt || ''));
-            continue;
-          }
-
-          // Case B: V1.1's original_excerpt matches a V1.0's original_excerpt directly
-          // → Same bullet, new content → keep as-is
-          const matchByOrig = v1ByOriginal.get(excerptKey);
-          if (matchByOrig) {
-            merged.push(v11Mod);
-            usedV1Keys.add(excerptKey);
-            continue;
-          }
-
-          // Case C: Brand new mod from V1.1 (not in V1.0)
-          merged.push(v11Mod);
-        }
-
-        // Carry forward V1.0 mods that V1.1 didn't touch or refine
-        for (const m of v1Mods) {
-          const key = normalizeKey(m.original_excerpt || '');
-          if (!usedV1Keys.has(key)) {
-            merged.push(m);
-          }
-        }
+        const merged = mergeModifications(v1Mods, v1_1Mods);
 
         data = { ...finalData, modifications: merged };
-        // Final pass — apply all merged mods at once (FINAL ROUND: smarter trimming)
+        // Final pass — apply all merged mods at once
         await updateLiveDoc(data.modifications, true);
         setLiveAtsScore(finalData.ats?.score ?? auditScore);
       }
@@ -943,11 +845,44 @@ const App: React.FC = () => {
       addLog(primaryName, doneMsg);
       await awaitTyping(doneMsg);
 
-      addLog('SYSTEM', 'Running final page-limit check…');
+      addLog('SYSTEM', 'Running page-overflow detection…');
       await new Promise(r => setTimeout(r, 500));
-      data = enforcePageLimit(data, resumeText);
 
-      // ── Re-sync live preview buffer with the final (post-trim) modifications ──
+      const overflowReport = detectPageOverflow(data, resumeText);
+
+      if (overflowReport.isOverflowing) {
+        // ── AI-driven condensing pass — no dumb trimming ──
+        addLog('SYSTEM', `⚠️ Overflow: +${overflowReport.overByChars} chars / +${overflowReport.overByLines} lines. Sending back to AI for intelligent condensing…`);
+        await new Promise(r => setTimeout(r, 300));
+
+        setThinking({ agent: primaryName, action: 'Condensing overflowing bullets…' });
+        const condensedData = await withRetry(
+          () => runPrimaryTailor({
+            previousModifications: data.modifications,
+            auditorFeedback: overflowReport.feedback,
+            currentScore: data.ats?.score ?? auditScore,
+          }),
+          primaryName
+        );
+        setThinking(null);
+        if (cancelRef.current) return;
+
+        if (condensedData.modifications?.length > 0) {
+          const prevMods = data.modifications ?? [];
+          const condensedMerged = mergeModifications(prevMods, condensedData.modifications);
+          data = { ...condensedData, modifications: condensedMerged };
+          await updateLiveDoc(data.modifications, true);
+          addLog('SYSTEM', `✅ AI condensed successfully. Verifying page fit…`);
+
+          // Verify the condensing actually worked
+          const recheck = detectPageOverflow(data, resumeText);
+          if (recheck.isOverflowing) {
+            addLog('SYSTEM', `⚠️ Still overflowing by ${recheck.overByChars} chars — minor overflow, proceeding. Check the final document.`);
+          }
+        }
+      }
+
+      // ── Re-sync live preview buffer with the final modifications ──
       // This ensures the preview exactly matches what the user downloads.
       if (data.modifications?.length > 0) {
         await updateLiveDoc(data.modifications, true);
@@ -1371,7 +1306,11 @@ const App: React.FC = () => {
                 </span>
               </div>
               <div className="flex-1 overflow-y-auto">
-                <DocxPreviewPane buffer={liveDocBuffer} isUpdating={isDocUpdating} />
+                {liveModifications.length > 0 ? (
+                  <SmoothDocumentPreview originalText={resumeText} modifications={liveModifications} />
+                ) : (
+                  <DocxPreviewPane buffer={liveDocBuffer} isUpdating={isDocUpdating} />
+                )}
               </div>
             </div>
 
