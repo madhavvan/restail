@@ -166,16 +166,35 @@ export const measureDocxBuffer = async (buffer: ArrayBuffer): Promise<DocMeasure
 // print-to-PDF engine, which preserves selectable text and layout.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const exportBufferAsPdf = async (
+export interface PrintFrame {
+  /** Real page dimensions (inches) used for @page — from the section's
+   *  min-height (the per-page height docx-preview derives from sectPr),
+   *  NEVER from the rendered rect height: a single-section document with
+   *  overflowing content (Google-Docs exports without rendered page breaks)
+   *  has a rect 2+ pages tall, which previously produced one giant PDF page. */
+  pageWidthIn: number;
+  pageHeightIn: number;
+  sections: number;
+  /** Open the browser print dialog (user picks "Save as PDF") and clean up. */
+  print: () => Promise<void>;
+  dispose: () => void;
+}
+
+/** Render the buffer into a hidden print-ready iframe. Exposed separately from
+ *  exportBufferAsPdf so the page geometry is verifiable in tests without
+ *  triggering a real print dialog. */
+export const preparePrintFrame = async (
   buffer: ArrayBuffer,
   suggestedName = 'Tailored_Resume'
-): Promise<void> => {
+): Promise<PrintFrame> => {
   const { renderAsync } = await loadDocxPreview();
 
   const iframe = document.createElement('iframe');
+  // Full page width so layout inside the frame is identical to the preview.
   iframe.style.cssText =
-    'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;visibility:hidden;';
+    'position:fixed;left:-12000px;top:0;width:1000px;height:1200px;border:0;visibility:hidden;';
   document.body.appendChild(iframe);
+  const dispose = () => iframe.remove();
 
   try {
     const idoc = iframe.contentDocument;
@@ -206,15 +225,29 @@ export const exportBufferAsPdf = async (
     );
     await settleLayout(idoc);
 
-    // Match @page to the document's true page size (px @ 96dpi → inches)
+    // True page size: min-height = one page; rect.width = page width.
     const firstSection = idoc.querySelector('section.docx') as HTMLElement | null;
+    const sections = idoc.querySelectorAll('section.docx').length;
     const rect = firstSection?.getBoundingClientRect();
-    const wIn = rect && rect.width > 100 ? (rect.width / 96).toFixed(3) : '8.5';
-    const hIn = rect && rect.height > 100 ? (rect.height / 96).toFixed(3) : '11';
+    const minH = firstSection
+      ? parseFloat(iwin.getComputedStyle(firstSection).minHeight)
+      : NaN;
+
+    const pageWidthIn = rect && rect.width > 100 ? rect.width / 96 : 8.5;
+    const pageHeightIn =
+      isFinite(minH) && minH > 100 ? minH / 96
+      : rect && rect.height > 100 ? rect.height / 96
+      : 11;
 
     const style = idoc.createElement('style');
     style.textContent = `
-      @page { size: ${wIn}in ${hIn}in; margin: 0; }
+      @page { size: ${pageWidthIn.toFixed(3)}in ${pageHeightIn.toFixed(3)}in; margin: 0; }
+      /* Word prints shading/colors; browsers strip them unless forced. This is
+         what kept the section-header bands out of the app's PDFs. */
+      * {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
       html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
       .docx-wrapper { background: #fff !important; padding: 0 !important; margin: 0 !important; display: block !important; }
       .docx-wrapper > section.docx {
@@ -227,17 +260,33 @@ export const exportBufferAsPdf = async (
     `;
     idoc.head.appendChild(style);
 
-    iwin.focus();
-    iwin.print();
+    const print = async () => {
+      try {
+        iwin.focus();
+        iwin.print();
+        // Keep the frame alive until the print dialog is dismissed.
+        await new Promise<void>(resolve => {
+          let done = false;
+          const finish = () => { if (!done) { done = true; resolve(); } };
+          try { iwin.addEventListener('afterprint', finish, { once: true }); } catch { /* ignore */ }
+          setTimeout(finish, 120000);
+        });
+      } finally {
+        dispose();
+      }
+    };
 
-    // Keep the frame alive until the print dialog is dismissed.
-    await new Promise<void>(resolve => {
-      let done = false;
-      const finish = () => { if (!done) { done = true; resolve(); } };
-      try { iwin.addEventListener('afterprint', finish, { once: true }); } catch { /* ignore */ }
-      setTimeout(finish, 120000);
-    });
-  } finally {
-    iframe.remove();
+    return { pageWidthIn, pageHeightIn, sections, print, dispose };
+  } catch (err) {
+    dispose();
+    throw err;
   }
+};
+
+export const exportBufferAsPdf = async (
+  buffer: ArrayBuffer,
+  suggestedName = 'Tailored_Resume'
+): Promise<void> => {
+  const frame = await preparePrintFrame(buffer, suggestedName);
+  await frame.print();
 };

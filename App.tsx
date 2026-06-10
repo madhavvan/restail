@@ -16,7 +16,7 @@ import {
   applyModificationsToBuffer, extractParagraphTable,
   applyModificationsByIdToBuffer, visibleTextOf,
 } from './services/documentService';
-import { measureDocxBuffer } from './services/docxRender';
+import { measureDocxBuffer, preparePrintFrame } from './services/docxRender';
 import { scoreTextAgainstKeywords, composeModifiedText } from './services/atsScore';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -373,6 +373,7 @@ const App: React.FC = () => {
         applyModificationsByIdToBuffer,
         scoreTextAgainstKeywords,
         visibleTextOf,
+        preparePrintFrame,
       };
     }
   }, []);

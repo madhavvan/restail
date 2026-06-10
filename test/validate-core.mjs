@@ -76,6 +76,17 @@ try {
     const score = R.scoreTextAgainstKeywords(
       'Node.js engineer; CI/CD pipelines; reduced alert-noise daily.', kw);
 
+    // ── 6. PDF print-frame geometry (giant-page regression guard) ──
+    // The GDocs-exported resume renders as ONE tall docx-preview section;
+    // @page must still be A4-sized (from min-height), not content-sized.
+    const frame = await R.preparePrintFrame(buffer.slice(0), 'test');
+    const printGeom = {
+      w: frame.pageWidthIn,
+      h: frame.pageHeightIn,
+      sections: frame.sections,
+    };
+    frame.dispose();
+
     return {
       paraCount: paras.length,
       lockedSummary: paras.filter(p => p.locked).slice(0, 8).map(p => `${p.id}:${p.lockReason}`),
@@ -100,6 +111,7 @@ try {
       lockWarnings: lockTry.warnings,
       titleAfter: titleParas[1]?.fullText,
       score,
+      printGeom,
       parasBrief: paras.slice(0, 8).map(p => ({ id: p.id, locked: p.locked, t: (p.fullText || '').slice(0, 40) })),
     };
   }, b64);
@@ -150,6 +162,19 @@ try {
     result.score.matched.includes('alert noise') && result.score.missing.includes('sre') &&
     result.score.missing.includes('powershell'),
     JSON.stringify({ matched: result.score.matched, missing: result.score.missing, score: result.score.score }));
+
+  // PDF @page must be A4-sized (8.27×11.69in), never content-sized (~23in tall)
+  const g = result.printGeom;
+  check('print frame uses true A4 page size (not giant single page)',
+    Math.abs(g.w - 8.27) < 0.25 && Math.abs(g.h - 11.69) < 0.25,
+    `got ${g.w.toFixed(2)}in × ${g.h.toFixed(2)}in (${g.sections} section(s))`);
+
+  // ── UI: Grok present as BOTH writer and feedback model ──
+  const grokButtons = await page.locator('button:has-text("Grok 4.3")').count();
+  check('Grok 4.3 appears in writer + feedback model grids', grokButtons >= 2,
+    `found ${grokButtons} Grok buttons`);
+  const labels = await page.locator('text=GPT-5.5').count();
+  check('updated model labels rendered (GPT-5.5)', labels >= 2, `found ${labels}`);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exitCode = fail ? 1 : 0;

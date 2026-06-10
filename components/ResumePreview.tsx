@@ -231,7 +231,7 @@ const ResumePreview: React.FC<ResumePreviewProps> = ({
           <button
             onClick={handleDownloadPdf}
             disabled={isExportingPdf}
-            title='Opens your browser print dialog — choose "Save as PDF". Output stays text-based (ATS-readable).'
+            title='Opens your browser print dialog — choose "Save as PDF". Output stays text-based (ATS-readable). If colors look washed out, enable "Background graphics" in the dialog.'
             className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all shadow-sm whitespace-nowrap border-2 ${
               isExportingPdf
                 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
