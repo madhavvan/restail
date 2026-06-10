@@ -16,7 +16,8 @@ export const createOptimizationPlan = async (
 
   const response = await openai.chat.completions.create({
     model: OPENAI_MODEL,
-    temperature: 0.7,
+    // gpt-5.x reasoning models reject non-default temperature (400:
+    // "Only the default (1) value is supported") — omit the param entirely.
     messages: [
       {
         role: "system",
@@ -413,7 +414,7 @@ Your job in this round is to REFINE the wording of Version 1.0, NOT to trim, tru
 
   const response = await openai.chat.completions.create({
     model: OPENAI_MODEL,
-    temperature: 0.65,
+    // gpt-5.x reasoning models reject non-default temperature — omit.
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user",   content: userPrompt.trim() }
@@ -440,12 +441,14 @@ Your job in this round is to REFINE the wording of Version 1.0, NOT to trim, tru
 // precisionService.ts; this exposes GPT as an LlmCall transport.
 // ─────────────────────────────────────────────────────────────────────────────
 export const openaiLlm = (apiKey: string): LlmCall =>
-  async (system, user, temperature, _maxTokens) => {
+  async (system, user, _temperature, _maxTokens) => {
     if (!apiKey) throw new Error("OpenAI API Key missing.");
     const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
+    // gpt-5.x reasoning models reject non-default temperature and use
+    // max_completion_tokens semantics — omit both; the precision pipeline's
+    // determinism comes from code-side validation, not sampling params.
     const response = await openai.chat.completions.create({
       model: OPENAI_MODEL,
-      temperature,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },

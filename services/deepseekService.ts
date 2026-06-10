@@ -24,7 +24,7 @@ export const createOptimizationPlanDeepSeek = async (
 
   const response = await deepseek.chat.completions.create({
     model: DEEPSEEK_MODEL,
-    temperature: 0.7,
+    // V4 thinking mode restricts sampling params — use defaults.
     max_tokens: 32000,
     messages: [
       { 
@@ -299,7 +299,7 @@ Return updated JSON now.`;
 
   const response = await deepseek.chat.completions.create({
     model: DEEPSEEK_MODEL,
-    temperature: 0.65,
+    // V4 thinking mode restricts sampling params — use defaults.
     max_tokens: 32000,
     messages: [
       { role: "system", content: systemPrompt.trim() },
@@ -326,16 +326,16 @@ Return updated JSON now.`;
 // precisionService.ts; this exposes DeepSeek as an LlmCall transport.
 // ─────────────────────────────────────────────────────────────────────────────
 export const deepseekLlm = (apiKey: string): LlmCall =>
-  async (system, user, temperature, maxTokens) => {
+  async (system, user, _temperature, maxTokens) => {
     if (!apiKey) throw new Error("DeepSeek API Key missing.");
     const deepseek = new OpenAI({
       apiKey,
       baseURL: "https://api.deepseek.com",
       dangerouslyAllowBrowser: true,
     });
+    // V4 thinking mode restricts sampling params — omit temperature.
     const response = await deepseek.chat.completions.create({
       model: DEEPSEEK_MODEL,
-      temperature,
       max_tokens: Math.min(maxTokens, 32000),
       messages: [
         { role: "system", content: system },

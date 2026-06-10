@@ -18,11 +18,11 @@ const grokClient = (apiKey: string) =>
 // precisionService.ts; this exposes Grok as an LlmCall transport.
 // ─────────────────────────────────────────────────────────────────────────────
 export const grokLlm = (apiKey: string): LlmCall =>
-  async (system, user, temperature, maxTokens) => {
+  async (system, user, _temperature, maxTokens) => {
     if (!apiKey) throw new Error("Grok API Key missing.");
+    // Reasoning-class models restrict sampling params — omit temperature.
     const response = await grokClient(apiKey).chat.completions.create({
       model: GROK_MODEL,
-      temperature,
       max_tokens: Math.min(maxTokens, 32000),
       messages: [
         { role: "system", content: system },
@@ -44,7 +44,7 @@ export const createOptimizationPlanGrok = async (
 
   const response = await grokClient(apiKey).chat.completions.create({
     model: GROK_MODEL,
-    temperature: 0.7,
+    // Reasoning-class models restrict sampling params — use defaults.
     max_tokens: 8000,
     messages: [
       {
@@ -207,7 +207,7 @@ Return ONLY valid JSON.`;
 
   const response = await grok.chat.completions.create({
     model: GROK_MODEL,
-    temperature: 0.3,
+    // Reasoning-class models restrict sampling params — use defaults.
     max_tokens: 16000,
     messages: [
       { role: "system", content: systemPrompt.trim() },

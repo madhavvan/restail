@@ -35,7 +35,7 @@ PROPOSED OPTIMIZATION PLAN:
 IMPORTANT: Discuss ONLY the strategy, what changes to make, and why. DO NOT output the actual resume content or bullet points here. The resume content must be written in the uploaded document only.
 
 Please review this plan and provide your critical feedback."`,
-      temperature: 0.7,
+      // Gemini 3.x thinking models restrict sampling params — use defaults.
     }
   });
 
@@ -417,7 +417,6 @@ Return updated JSON now.`;
     contents: userPrompt.trim(),
     config: {
       systemInstruction: systemInstruction.trim(),
-      temperature: 0.65,
       maxOutputTokens: 32000,
       responseMimeType: "application/json",
     }
@@ -441,16 +440,17 @@ Return updated JSON now.`;
 // precisionService.ts; this exposes Gemini as an LlmCall transport.
 // ─────────────────────────────────────────────────────────────────────────────
 export const geminiLlm = (apiKey: string): LlmCall =>
-  async (system, user, temperature, maxTokens) => {
+  async (system, user, _temperature, maxTokens) => {
     const key = apiKey || (process.env.GEMINI_API_KEY as string);
     if (!key) throw new Error("Gemini API Key missing.");
     const ai = new GoogleGenAI({ apiKey: key });
+    // Thinking-class models reject non-default sampling params — omit
+    // temperature; pipeline determinism is enforced by code-side validation.
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
       contents: user,
       config: {
         systemInstruction: system,
-        temperature,
         maxOutputTokens: maxTokens,
       },
     });
