@@ -4,13 +4,14 @@ import FileUpload from './components/FileUpload';
 import ResumePreview from './components/ResumePreview';
 import SmoothDocumentPreview from './components/SmoothDocumentPreview';
 import SettingsModal from './components/SettingsModal';
-import { tailorResumeOpenAI, createOptimizationPlan } from './services/openaiService';
-import { tailorResumeDeepSeek, createOptimizationPlanDeepSeek } from './services/deepseekService';
-import { tailorResumeGemini, createOptimizationPlanGemini } from './services/geminiService';
+import { tailorResumeOpenAI, createOptimizationPlan, openaiLlm } from './services/openaiService';
+import { tailorResumeDeepSeek, createOptimizationPlanDeepSeek, deepseekLlm } from './services/deepseekService';
+import { tailorResumeGemini, createOptimizationPlanGemini, geminiLlm } from './services/geminiService';
+import { tailorResumeClaude, createOptimizationPlanClaude, claudeLlm } from './services/claudeService';
+import { grokLlm, createOptimizationPlanGrok } from './services/grokservices';
 import {
-  tailorResumeClaude, createOptimizationPlanClaude,
-  extractJdKeywordsClaude, tailorResumeClaudePrecision, EngineFindings,
-} from './services/claudeService';
+  extractJdKeywords, tailorResumePrecision, EngineFindings, LlmCall,
+} from './services/precisionService';
 import {
   applyModificationsToBuffer, extractParagraphTable,
   applyModificationsByIdToBuffer, visibleTextOf,
@@ -234,6 +235,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   deepseekApiKey: '',
   geminiApiKey:   '',
   claudeApiKey:   '',
+  grokApiKey:     '',
   activeProvider: 'openai',
   feedbackProvider: 'deepseek',
 };
@@ -276,22 +278,37 @@ const OPENAI_LOGO   = 'https://upload.wikimedia.org/wikipedia/commons/0/04/ChatG
 const DEEPSEEK_LOGO = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%234d6bfe'/><path d='M30 65 Q50 20 70 65' stroke='white' stroke-width='8' fill='none' stroke-linecap='round'/><circle cx='50' cy='68' r='6' fill='white'/></svg>`;
 const GEMINI_LOGO   = 'https://upload.wikimedia.org/wikipedia/commons/8/8a/Google_Gemini_logo.svg';
 const CLAUDE_LOGO   = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%23D97706'/><text x='50' y='62' text-anchor='middle' font-size='40' font-weight='bold' fill='white' font-family='sans-serif'>C</text></svg>`;
+const GROK_LOGO     = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%23111827'/><text x='50' y='64' text-anchor='middle' font-size='42' font-weight='bold' fill='white' font-family='sans-serif'>X</text></svg>`;
 
 const agentIcon = (name: string) => {
   if (name.includes('GPT'))      return <img src={OPENAI_LOGO}   alt="GPT"    className="w-4 h-4 object-contain" />;
   if (name.includes('DeepSeek')) return <img src={DEEPSEEK_LOGO} alt="DS"     className="w-4 h-4 object-contain" />;
   if (name.includes('Claude'))   return <img src={CLAUDE_LOGO}   alt="Claude" className="w-4 h-4 object-contain" />;
+  if (name.includes('Grok'))     return <img src={GROK_LOGO}     alt="Grok"   className="w-4 h-4 object-contain" />;
   return                                <img src={GEMINI_LOGO}   alt="Gemini" className="w-4 h-4 object-contain" />;
 };
-const agentBg   = (n: string) => n.includes('GPT') ? 'bg-emerald-50/80'   : n.includes('DeepSeek') ? 'bg-blue-50/80'   : n.includes('Claude') ? 'bg-amber-50/80' : 'bg-violet-50/80';
-const agentText = (n: string) => n.includes('GPT') ? 'text-emerald-700' : n.includes('DeepSeek') ? 'text-blue-700' : n.includes('Claude') ? 'text-amber-700' : 'text-violet-700';
+const agentBg   = (n: string) => n.includes('GPT') ? 'bg-emerald-50/80'   : n.includes('DeepSeek') ? 'bg-blue-50/80'   : n.includes('Claude') ? 'bg-amber-50/80' : n.includes('Grok') ? 'bg-slate-100/80' : 'bg-violet-50/80';
+const agentText = (n: string) => n.includes('GPT') ? 'text-emerald-700' : n.includes('DeepSeek') ? 'text-blue-700' : n.includes('Claude') ? 'text-amber-700' : n.includes('Grok') ? 'text-slate-700' : 'text-violet-700';
 
-// ─── Provider label helper ────────────────────────────────────────────────────
+// ─── Provider label helper (model IDs verified against vendor docs 2026-06-10) ─
 const providerLabel = (p: string) =>
-  p === 'openai' ? 'GPT-5.2' : p === 'deepseek' ? 'DeepSeek-V3.2' : p === 'claude' ? 'Claude Sonnet 4.6' : 'Gemini 3.1 Pro';
+  p === 'openai'   ? 'GPT-5.5'
+  : p === 'deepseek' ? 'DeepSeek V4 Pro'
+  : p === 'claude'   ? 'Claude Sonnet 4.6'
+  : p === 'grok'     ? 'Grok 4.3'
+  : 'Gemini 3.1 Pro';
+
+const apiKeyField = (p: string) =>
+  p === 'claude'   ? 'claudeApiKey'
+  : p === 'openai'   ? 'openaiApiKey'
+  : p === 'deepseek' ? 'deepseekApiKey'
+  : p === 'grok'     ? 'grokApiKey'
+  : 'geminiApiKey';
+
+const ALL_PROVIDERS = ['openai', 'deepseek', 'gemini', 'claude', 'grok'] as const;
 const providerPairLabel = (p: string, f?: string) => {
   const writer = providerLabel(p);
-  const feedback = f ? providerLabel(f) : 'DeepSeek-V3.2';
+  const feedback = f ? providerLabel(f) : 'DeepSeek V4 Pro';
   return `${writer} ⇆ ${feedback}`;
 };
 
@@ -708,21 +725,34 @@ const App: React.FC = () => {
   //      back with exact findings; paragraphs that can't be fixed revert to
   //      their original text — layout is guaranteed, never "hope it fits".
   // ───────────────────────────────────────────────────────────────────────────
-  const runClaudePipeline = async () => {
-    const claudeKey = () => settingsRef.current.claudeApiKey;
-    if (!claudeKey()) throw new Error('Claude API key missing — add it in Settings.');
+  const runPrecisionPipeline = async () => {
     if (!originalFileBuffer) throw new Error('Original .docx buffer missing — please re-upload the file.');
 
-    const primaryName = 'Claude Sonnet 4.6';
-    const fbProvider = settingsRef.current.feedbackProvider || 'deepseek';
-    const reviewerName = providerLabel(fbProvider);
     const getApiKey = (p: string) => {
       if (p === 'openai')   return settingsRef.current.openaiApiKey;
       if (p === 'deepseek') return settingsRef.current.deepseekApiKey;
       if (p === 'gemini')   return settingsRef.current.geminiApiKey;
       if (p === 'claude')   return settingsRef.current.claudeApiKey;
+      if (p === 'grok')     return settingsRef.current.grokApiKey || '';
       return '';
     };
+
+    // Writer transport — every provider speaks the same precision contract.
+    // Resolved per-call so the mid-run "switch model & continue" rescue works.
+    const writerFor = (p: string): { name: string; llm: LlmCall } => {
+      const key = getApiKey(p);
+      if (!key) throw new Error(`${providerLabel(p)} API key missing — add it in Settings.`);
+      if (p === 'openai')   return { name: providerLabel(p), llm: openaiLlm(key) };
+      if (p === 'deepseek') return { name: providerLabel(p), llm: deepseekLlm(key) };
+      if (p === 'gemini')   return { name: providerLabel(p), llm: geminiLlm(key) };
+      if (p === 'grok')     return { name: providerLabel(p), llm: grokLlm(key) };
+      return { name: providerLabel('claude'), llm: claudeLlm(key) };
+    };
+    const wllm: LlmCall = (s, u, t, m) => writerFor(settingsRef.current.activeProvider).llm(s, u, t, m);
+
+    const primaryName = writerFor(settingsRef.current.activeProvider).name;
+    const fbProvider = settingsRef.current.feedbackProvider || 'deepseek';
+    const reviewerName = providerLabel(fbProvider);
 
     addLog('SYSTEM', `Precision pipeline engaged. ${primaryName} ⇆ ${reviewerName} connected.`);
 
@@ -788,7 +818,7 @@ const App: React.FC = () => {
 
     // ── 2 · JD keywords + measured baseline ─────────────────────────────────
     setThinking({ agent: primaryName, action: 'Extracting JD keyword matrix…' });
-    const keywords = await withRetry(() => extractJdKeywordsClaude(jobDescription, claudeKey()), primaryName);
+    const keywords = await withRetry(() => extractJdKeywords(wllm, jobDescription), primaryName);
     setThinking(null);
     if (cancelRef.current) return;
 
@@ -805,7 +835,15 @@ const App: React.FC = () => {
     if (cancelRef.current) return;
 
     setThinking({ agent: primaryName, action: 'Building optimization plan…' });
-    const plan = await withRetry(() => createOptimizationPlanClaude(resumeText, jobDescription, claudeKey()), primaryName);
+    const writerPlan = () => {
+      const p = settingsRef.current.activeProvider;
+      if (p === 'openai')   return createOptimizationPlan(resumeText, jobDescription, getApiKey('openai'));
+      if (p === 'deepseek') return createOptimizationPlanDeepSeek(resumeText, jobDescription, getApiKey('deepseek'), reviewerName);
+      if (p === 'gemini')   return createOptimizationPlanGemini(resumeText, jobDescription, getApiKey('gemini'));
+      if (p === 'grok')     return createOptimizationPlanGrok(resumeText, jobDescription, getApiKey('grok'), reviewerName);
+      return createOptimizationPlanClaude(resumeText, jobDescription, getApiKey('claude'));
+    };
+    const plan = await withRetry(writerPlan, primaryName);
     setThinking(null);
     if (cancelRef.current) return;
 
@@ -820,6 +858,7 @@ const App: React.FC = () => {
       if (fb === 'deepseek') return createOptimizationPlanDeepSeek(resumeText, jobDescription, getApiKey('deepseek'), primaryName);
       if (fb === 'openai')   return createOptimizationPlan(resumeText, jobDescription, getApiKey('openai'));
       if (fb === 'claude')   return createOptimizationPlanClaude(resumeText, jobDescription, getApiKey('claude'));
+      if (fb === 'grok')     return createOptimizationPlanGrok(resumeText, jobDescription, getApiKey('grok'), primaryName);
       return createOptimizationPlanGemini(resumeText, jobDescription, getApiKey('gemini'));
     };
     const reviewFeedback = await withRetry(reviewerPlan, reviewerName);
@@ -923,7 +962,7 @@ const App: React.FC = () => {
 
     setThinking({ agent: primaryName, action: 'Writing Version 1.0 (precision mode)…' });
     const v1 = await withRetry(
-      () => tailorResumeClaudePrecision(paragraphs, jobDescription, keywords, claudeKey(), {
+      () => tailorResumePrecision(wllm, paragraphs, jobDescription, keywords, {
         round: 'write',
         strategistNotes: reviewFeedback,
       }),
@@ -940,7 +979,7 @@ const App: React.FC = () => {
       addLog('SYSTEM', `⚠️ ${v1Violations.length} mod(s) exceed their hard budgets — engine findings sent back for repair.`);
       setThinking({ agent: primaryName, action: `Repairing ${v1Violations.length} over-budget paragraph(s)…` });
       const repair = await withRetry(
-        () => tailorResumeClaudePrecision(paragraphs, jobDescription, keywords, claudeKey(), {
+        () => tailorResumePrecision(wllm, paragraphs, jobDescription, keywords, {
           round: 'repair',
           previousModifications: mods,
           findings: { budgetViolations: v1Violations, layoutOffenders: [] },
@@ -976,7 +1015,7 @@ const App: React.FC = () => {
       addLog('SYSTEM', `⚠️ Layout repair round ${round}: content ${check.heightDeltaLines >= 0 ? '+' : ''}${check.heightDeltaLines.toFixed(1)} line(s) · ${check.offenders.length} offender(s). Engine findings sent back.`);
       setThinking({ agent: primaryName, action: 'Condensing measured overflow…' });
       const repair = await withRetry(
-        () => tailorResumeClaudePrecision(paragraphs, jobDescription, keywords, claudeKey(), {
+        () => tailorResumePrecision(wllm, paragraphs, jobDescription, keywords, {
           round: 'repair',
           previousModifications: mods,
           findings: {
@@ -1023,7 +1062,7 @@ const App: React.FC = () => {
       addLog('SYSTEM', `Coverage sweep ${sweep}: ${score.missing.length} JD keyword(s) still unplaced → targeted refinement.`);
       setThinking({ agent: primaryName, action: `Placing ${score.missing.length} missing keyword(s)…` });
       const refine = await withRetry(
-        () => tailorResumeClaudePrecision(paragraphs, jobDescription, keywords, claudeKey(), {
+        () => tailorResumePrecision(wllm, paragraphs, jobDescription, keywords, {
           round: 'repair',
           previousModifications: mods,
           findings: {
@@ -1107,23 +1146,19 @@ const App: React.FC = () => {
     if (originalFileBuffer) setLiveDocBuffer(originalFileBuffer.slice(0));
 
     try {
-      // ── Claude writer → precision pipeline (ID protocol + render loop) ──
-      if (settingsRef.current.activeProvider === 'claude') {
-        await runClaudePipeline();
-        return;
-      }
+      // ── ALL writers route through the precision pipeline (ID protocol +
+      // render-verified layout + measured ATS). The legacy excerpt flow below
+      // is retained only as reference / emergency fallback.
+      await runPrecisionPipeline();
+      return;
 
+      // eslint-disable-next-line no-unreachable
       let data: TailoredResumeData = { agents: {} as any, modifications: [] };
       const provider = settingsRef.current.activeProvider;
 
-      // (claude routes to runClaudePipeline above — legacy flow serves the rest)
-      let primaryName  = 'GPT-5.2';
-      let reviewerName = 'DeepSeek-V3.2';
-      if (provider === 'deepseek') {
-        primaryName  = 'DeepSeek-V3.2';
-      } else if (provider === 'gemini') {
-        primaryName  = 'Gemini 3.1 Pro';
-      }
+      // (legacy excerpt flow — unreachable; precision pipeline serves all writers)
+      let primaryName  = providerLabel(provider);
+      let reviewerName = 'DeepSeek V4 Pro';
 
       // Dynamic feedback model from settings
       const fbProvider = settingsRef.current.feedbackProvider || 'deepseek';
@@ -1370,13 +1405,13 @@ const App: React.FC = () => {
   // ── Available providers for mid-switch (exclude current) ──
   const getAlternativeProviders = () => {
     const current = settingsRef.current.activeProvider;
-    const all = [
-      { key: 'openai', label: 'GPT-5.2', hasKey: !!settingsRef.current.openaiApiKey },
-      { key: 'deepseek', label: 'DeepSeek-V3.2', hasKey: !!settingsRef.current.deepseekApiKey },
-      { key: 'gemini', label: 'Gemini 3.1 Pro', hasKey: !!settingsRef.current.geminiApiKey },
-      { key: 'claude', label: 'Claude Sonnet 4.6', hasKey: !!settingsRef.current.claudeApiKey },
-    ];
-    return all.filter(p => p.key !== current && p.hasKey);
+    return ALL_PROVIDERS
+      .map(key => ({
+        key,
+        label: providerLabel(key),
+        hasKey: !!(settingsRef.current as any)[apiKeyField(key)],
+      }))
+      .filter(p => p.key !== current && p.hasKey);
   };
 
   // ─── Render ────────────────────────────────────────────────────────────────
@@ -1533,10 +1568,11 @@ const App: React.FC = () => {
                   </label>
                   <div className="grid grid-cols-2 gap-2">
                     {([
-                      { key: 'openai', label: 'GPT-5.2', icon: OPENAI_LOGO, ring: 'ring-emerald-400', bg: 'bg-emerald-50', text: 'text-emerald-700', hasKey: !!settings.openaiApiKey },
-                      { key: 'deepseek', label: 'DeepSeek-V3.2', icon: DEEPSEEK_LOGO, ring: 'ring-blue-400', bg: 'bg-blue-50', text: 'text-blue-700', hasKey: !!settings.deepseekApiKey },
+                      { key: 'openai', label: 'GPT-5.5', icon: OPENAI_LOGO, ring: 'ring-emerald-400', bg: 'bg-emerald-50', text: 'text-emerald-700', hasKey: !!settings.openaiApiKey },
+                      { key: 'deepseek', label: 'DeepSeek V4 Pro', icon: DEEPSEEK_LOGO, ring: 'ring-blue-400', bg: 'bg-blue-50', text: 'text-blue-700', hasKey: !!settings.deepseekApiKey },
                       { key: 'gemini', label: 'Gemini 3.1 Pro', icon: GEMINI_LOGO, ring: 'ring-violet-400', bg: 'bg-violet-50', text: 'text-violet-700', hasKey: !!settings.geminiApiKey },
                       { key: 'claude', label: 'Claude Sonnet 4.6', icon: CLAUDE_LOGO, ring: 'ring-amber-400', bg: 'bg-amber-50', text: 'text-amber-700', hasKey: !!settings.claudeApiKey },
+                      { key: 'grok', label: 'Grok 4.3', icon: GROK_LOGO, ring: 'ring-slate-400', bg: 'bg-slate-100', text: 'text-slate-700', hasKey: !!settings.grokApiKey },
                     ] as const).map(m => (
                       <button
                         key={m.key}
@@ -1544,7 +1580,7 @@ const App: React.FC = () => {
                           const newSettings = { ...settings, activeProvider: m.key as any };
                           // Auto-adjust feedback if same as writer
                           if (newSettings.feedbackProvider === m.key) {
-                            const fallback = ['openai', 'deepseek', 'gemini', 'claude'].find(k => k !== m.key && (settings as any)[k === 'claude' ? 'claudeApiKey' : k === 'openai' ? 'openaiApiKey' : k === 'deepseek' ? 'deepseekApiKey' : 'geminiApiKey']);
+                            const fallback = ALL_PROVIDERS.find(k => k !== m.key && !!(settings as any)[apiKeyField(k)]);
                             newSettings.feedbackProvider = (fallback || 'deepseek') as any;
                           }
                           handleSaveSettings(newSettings);
@@ -1575,10 +1611,11 @@ const App: React.FC = () => {
                   </label>
                   <div className="grid grid-cols-2 gap-2">
                     {([
-                      { key: 'openai', label: 'GPT-5.2', icon: OPENAI_LOGO, ring: 'ring-emerald-400', bg: 'bg-emerald-50', text: 'text-emerald-700', hasKey: !!settings.openaiApiKey },
-                      { key: 'deepseek', label: 'DeepSeek-V3.2', icon: DEEPSEEK_LOGO, ring: 'ring-blue-400', bg: 'bg-blue-50', text: 'text-blue-700', hasKey: !!settings.deepseekApiKey },
+                      { key: 'openai', label: 'GPT-5.5', icon: OPENAI_LOGO, ring: 'ring-emerald-400', bg: 'bg-emerald-50', text: 'text-emerald-700', hasKey: !!settings.openaiApiKey },
+                      { key: 'deepseek', label: 'DeepSeek V4 Pro', icon: DEEPSEEK_LOGO, ring: 'ring-blue-400', bg: 'bg-blue-50', text: 'text-blue-700', hasKey: !!settings.deepseekApiKey },
                       { key: 'gemini', label: 'Gemini 3.1 Pro', icon: GEMINI_LOGO, ring: 'ring-violet-400', bg: 'bg-violet-50', text: 'text-violet-700', hasKey: !!settings.geminiApiKey },
                       { key: 'claude', label: 'Claude Sonnet 4.6', icon: CLAUDE_LOGO, ring: 'ring-amber-400', bg: 'bg-amber-50', text: 'text-amber-700', hasKey: !!settings.claudeApiKey },
+                      { key: 'grok', label: 'Grok 4.3', icon: GROK_LOGO, ring: 'ring-slate-400', bg: 'bg-slate-100', text: 'text-slate-700', hasKey: !!settings.grokApiKey },
                     ] as const).map(m => {
                       const isWriter = settings.activeProvider === m.key;
                       return (

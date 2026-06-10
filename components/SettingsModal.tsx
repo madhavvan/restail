@@ -13,10 +13,11 @@ interface SettingsModalProps {
 }
 
 const PROVIDERS = [
-  { key: 'openai',   label: 'OpenAI (GPT-5.2)',       color: 'emerald', fieldKey: 'openaiApiKey'   },
-  { key: 'deepseek', label: 'DeepSeek (V3.2)',         color: 'blue',    fieldKey: 'deepseekApiKey' },
+  { key: 'openai',   label: 'OpenAI (GPT-5.5)',       color: 'emerald', fieldKey: 'openaiApiKey'   },
+  { key: 'deepseek', label: 'DeepSeek (V4 Pro)',       color: 'blue',    fieldKey: 'deepseekApiKey' },
   { key: 'gemini',   label: 'Google Gemini (3.1 Pro)',  color: 'violet',  fieldKey: 'geminiApiKey'   },
   { key: 'claude',   label: 'Anthropic (Sonnet 4.6)',     color: 'amber',   fieldKey: 'claudeApiKey'   },
+  { key: 'grok',     label: 'xAI (Grok 4.3)',            color: 'orange',  fieldKey: 'grokApiKey'     },
 ] as const;
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onSave }) => {
@@ -143,7 +144,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                       </div>
                     )}
                     <span className={`text-[11px] font-bold block ${isActive ? 'text-indigo-700' : 'text-slate-600'}`}>
-                      {p.key === 'openai' ? 'GPT-5.2' : p.key === 'deepseek' ? 'DeepSeek' : p.key === 'claude' ? 'Claude' : 'Gemini'}
+                      {p.key === 'openai' ? 'GPT-5.5' : p.key === 'deepseek' ? 'DeepSeek' : p.key === 'claude' ? 'Claude' : p.key === 'grok' ? 'Grok' : 'Gemini'}
                     </span>
                   </button>
                 );
@@ -179,7 +180,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                     <span className={`w-2 h-2 rounded-full ${
                       p.color === 'emerald' ? 'bg-emerald-400' :
                       p.color === 'blue' ? 'bg-blue-400' :
-                      p.color === 'amber' ? 'bg-amber-400' : 'bg-violet-400'
+                      p.color === 'amber' ? 'bg-amber-400' :
+                      p.color === 'orange' ? 'bg-orange-400' : 'bg-violet-400'
                     }`} />
                     {p.label}
                     {value && (
@@ -221,69 +223,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
             })}
           </div>
 
-          {/* ═══════════════════════════════════════════════════════════════════
-              AGENTIC API KEYS — Separate section for quality-gate agents
-              ═══════════════════════════════════════════════════════════════════ */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <Cpu className="w-3.5 h-3.5 text-orange-500" />
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Agentic API Keys</span>
-              <div className="flex-1 h-px bg-slate-200 ml-2" />
-            </div>
-
-            {/* Agentic info notice */}
-            <div className="flex items-start gap-2 bg-orange-50 border border-orange-200 rounded-xl p-3">
-              <Cpu className="w-4 h-4 text-orange-500 mt-0.5 flex-shrink-0" />
-              <p className="text-[11px] text-orange-700 leading-relaxed">
-                Agentic models run automatically as quality gates. They are <strong>not</strong> selectable
-                as writer or feedback models — they activate after the final version to catch defects.
-              </p>
-            </div>
-
-            {/* Grok API Key */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-orange-400" />
-                xAI Grok (Quality Gate)
-                {(local.grokApiKey || '') && (
-                  <span className="ml-auto text-[10px] font-medium text-green-500 flex items-center gap-0.5">
-                    <Check className="w-2.5 h-2.5" /> Configured
-                  </span>
-                )}
-              </label>
-              <div className="relative group">
-                <input
-                  type={showKeys.grokApiKey ? 'text' : 'password'}
-                  value={local.grokApiKey || ''}
-                  onChange={e => updateField('grokApiKey', e.target.value)}
-                  placeholder="Enter xAI Grok API key…"
-                  className="w-full px-4 py-3 pr-12 rounded-xl border border-slate-200 bg-slate-50/50 text-sm font-mono text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400 outline-none transition-all"
-                  autoComplete="off"
-                />
-                <button
-                  type="button"
-                  onClick={() => toggleKeyVisibility('grokApiKey')}
-                  className={`absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-md transition-all ${
-                    local.grokApiKey
-                      ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50'
-                      : 'text-slate-300 cursor-default'
-                  }`}
-                  disabled={!local.grokApiKey}
-                  title={showKeys.grokApiKey ? 'Hide API key' : 'Show API key'}
-                >
-                  {showKeys.grokApiKey ? (
-                    <EyeOff className="w-4 h-4" />
-                  ) : (
-                    <Eye className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-              <p className="mt-1.5 text-[10px] text-slate-400 leading-relaxed">
-                Grok reviews the final document after V1.1 for incomplete sentences, cutoffs & dangling phrases.
-                Uses <span className="font-mono text-orange-500">grok-4-1-fast-reasoning</span> model.
-              </p>
-            </div>
-          </div>
         </div>
 
         {/* Footer with animated save button */}

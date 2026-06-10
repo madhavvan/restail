@@ -1,5 +1,76 @@
 import OpenAI from "openai";
 import { Modification } from "../types";
+import type { LlmCall } from "./precisionService";
+
+// Current flagship per docs.x.ai/developers/models (verified 2026-06-10):
+// "For everything else, use Grok 4.3."
+const GROK_MODEL = "grok-4.3";
+
+const grokClient = (apiKey: string) =>
+  new OpenAI({
+    apiKey,
+    baseURL: "https://api.x.ai/v1",
+    dangerouslyAllowBrowser: true,
+  });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Precision-pipeline adapter — the provider-agnostic core lives in
+// precisionService.ts; this exposes Grok as an LlmCall transport.
+// ─────────────────────────────────────────────────────────────────────────────
+export const grokLlm = (apiKey: string): LlmCall =>
+  async (system, user, temperature, maxTokens) => {
+    if (!apiKey) throw new Error("Grok API Key missing.");
+    const response = await grokClient(apiKey).chat.completions.create({
+      model: GROK_MODEL,
+      temperature,
+      max_tokens: Math.min(maxTokens, 32000),
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    return response.choices[0]?.message?.content ?? "";
+  };
+
+/** Plan/critique call so Grok can also serve as the Feedback/Auditor model. */
+export const createOptimizationPlanGrok = async (
+  resumeText: string,
+  jobDescription: string,
+  apiKey: string,
+  writerModelName?: string
+): Promise<string> => {
+  if (!apiKey) throw new Error("Grok API Key missing.");
+  const partnerName = writerModelName || "the Primary Optimizer";
+
+  const response = await grokClient(apiKey).chat.completions.create({
+    model: GROK_MODEL,
+    temperature: 0.7,
+    max_tokens: 8000,
+    messages: [
+      {
+        role: "system",
+        content: `You are Grok 4.3, the Critical Reviewer working with ${partnerName}.
+You are an elite resume strategist. Review the optimization plan context (resume + JD) and give sharp, specific, actionable feedback.
+
+Start your response EXACTLY like this:
+
+"${partnerName}, I have carefully reviewed the resume and Job Description.
+
+REVIEW FEEDBACK:
+
+[your detailed feedback here]
+
+IMPORTANT: Discuss ONLY the strategy, what changes to make, and why. DO NOT output the actual resume content or bullet points here."`,
+      },
+      {
+        role: "user",
+        content: `RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}`,
+      },
+    ],
+  });
+
+  return response.choices[0]?.message?.content || "Failed to generate review.";
+};
 
 /**
  * Grok Quality Gate — Post-V1.1 Final Review
@@ -21,11 +92,7 @@ export const reviewFinalDocument = async (
 ): Promise<Modification[]> => {
   if (!apiKey) throw new Error("Grok API Key missing.");
 
-  const grok = new OpenAI({
-    apiKey,
-    baseURL: "https://api.x.ai/v1",
-    dangerouslyAllowBrowser: true,
-  });
+  const grok = grokClient(apiKey);
 
   const systemPrompt = `You are Grok, the Final Quality Gate Agent.
 Your ONLY job is to review the finalized resume modifications and catch any defective bullets before they reach the user.
@@ -139,7 +206,7 @@ Review each modification above. For any that have incomplete sentences, cutoffs,
 Return ONLY valid JSON.`;
 
   const response = await grok.chat.completions.create({
-    model: "grok-4-1-fast-reasoning",
+    model: GROK_MODEL,
     temperature: 0.3,
     max_tokens: 16000,
     messages: [

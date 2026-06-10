@@ -1,5 +1,9 @@
 import OpenAI from "openai";
 import { TailoredResumeData } from "../types";
+import type { LlmCall } from "./precisionService";
+
+// Current flagship per developers.openai.com/api/docs/models (verified 2026-06-10)
+const OPENAI_MODEL = "gpt-5.5";
 
 export const createOptimizationPlan = async (
   resumeText: string,
@@ -11,19 +15,19 @@ export const createOptimizationPlan = async (
   const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
 
   const response = await openai.chat.completions.create({
-    model: "gpt-5.4",
+    model: OPENAI_MODEL,
     temperature: 0.7,
     messages: [
       {
         role: "system",
-        content: `You are GPT-5.4, the Primary Optimizer collaborating with DeepSeek-V3.2.
+        content: `You are GPT-5.5, the Primary Optimizer collaborating with DeepSeek V4 Pro.
 You are an Elite Resume Copywriter and ATS Strategist with 30+ years of experience in IT systems, AI, and Data Engineering.
 
-Speak naturally and directly to DeepSeek-V3.2.
+Speak naturally and directly to DeepSeek V4 Pro.
 
 Start your response EXACTLY like this:
 
-"DeepSeek-V3.2, I have carefully reviewed the resume and Job Description.
+"DeepSeek V4 Pro, I have carefully reviewed the resume and Job Description.
 
 PROPOSED OPTIMIZATION PLAN:
 
@@ -70,8 +74,8 @@ export const tailorResumeOpenAI = async (
     .join('\n');
 
   const systemPrompt = `
-You are GPT-5.4 — Elite Executive Resume Writer and ATS Strategist.
-You are collaborating live with DeepSeek-V3.2 (Critical ATS Auditor).
+You are GPT-5.5 — Elite Executive Resume Writer and ATS Strategist.
+You are collaborating live with DeepSeek V4 Pro (Critical ATS Auditor).
 
 Your job is to rewrite ONLY the text content of specific bullet points and sections
 to better match the Job Description. You are NOT redesigning the resume.
@@ -329,7 +333,7 @@ FINAL CHECKLIST — before outputting any new_content, ask yourself:
 OUTPUT FORMAT — valid JSON only, no other text
 
 {
-  "agents": { "primary": "GPT-5.4", "auditor": "DeepSeek-V3.2" },
+  "agents": { "primary": "GPT-5.5", "auditor": "DeepSeek V4 Pro" },
   "ats": {
     "score": 95,
     "feedback": "Discuss ONLY the strategy, what changes were made, and why. DO NOT output the actual resume content or bullet points here. The resume content MUST ONLY be in the modifications array.",
@@ -408,7 +412,7 @@ Your job in this round is to REFINE the wording of Version 1.0, NOT to trim, tru
   }
 
   const response = await openai.chat.completions.create({
-    model: "gpt-5.4",
+    model: OPENAI_MODEL,
     temperature: 0.65,
     messages: [
       { role: "system", content: systemPrompt },
@@ -430,3 +434,22 @@ Your job in this round is to REFINE the wording of Version 1.0, NOT to trim, tru
     throw new Error("Failed to parse OpenAI response.");
   }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Precision-pipeline adapter — the provider-agnostic core lives in
+// precisionService.ts; this exposes GPT as an LlmCall transport.
+// ─────────────────────────────────────────────────────────────────────────────
+export const openaiLlm = (apiKey: string): LlmCall =>
+  async (system, user, temperature, _maxTokens) => {
+    if (!apiKey) throw new Error("OpenAI API Key missing.");
+    const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
+    const response = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      temperature,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    return response.choices[0]?.message?.content ?? "";
+  };

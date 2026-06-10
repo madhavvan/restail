@@ -72,7 +72,7 @@ export enum Step {
   PREVIEW = 'preview',
 }
 
-export type ModelProvider = 'openai' | 'deepseek' | 'gemini' | 'claude';
+export type ModelProvider = 'openai' | 'deepseek' | 'gemini' | 'claude' | 'grok';
 
 export interface AppSettings {
   openaiApiKey: string;

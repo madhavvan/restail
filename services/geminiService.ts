@@ -1,5 +1,10 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { TailoredResumeData } from "../types";
+import type { LlmCall } from "./precisionService";
+
+// Stable GA id — the -preview suffix was retired at GA (ai.google.dev
+// changelog, verified 2026-06-10)
+const GEMINI_MODEL = "gemini-3.1-pro";
 
 export const createOptimizationPlanGemini = async (
   resumeText: string,
@@ -12,16 +17,16 @@ export const createOptimizationPlanGemini = async (
   const ai = new GoogleGenAI({ apiKey: key });
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: GEMINI_MODEL,
     contents: `RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}`,
     config: {
-      systemInstruction: `You are Gemini 3.1 Pro, the Primary Optimizer collaborating with DeepSeek-V3.2.
+      systemInstruction: `You are Gemini 3.1 Pro, the Primary Optimizer collaborating with DeepSeek V4 Pro.
 
-Speak naturally and directly to DeepSeek-V3.2.
+Speak naturally and directly to DeepSeek V4 Pro.
 
 Start your response EXACTLY like this:
 
-"DeepSeek-V3.2, I have carefully reviewed the resume and Job Description.
+"DeepSeek V4 Pro, I have carefully reviewed the resume and Job Description.
 
 PROPOSED OPTIMIZATION PLAN:
 
@@ -58,7 +63,7 @@ export const tailorResumeGemini = async (
 
   let systemInstruction = `
 You are Gemini 3.1 Pro - Elite Executive Resume Writer and Formatting Expert.
-You are collaborating live with DeepSeek-V3.2 (Critical ATS Auditor).
+You are collaborating live with DeepSeek V4 Pro (Critical ATS Auditor).
 
 Your objective is to parse the user's provided resume, dramatically enhance the impact of the content, and **STRICTLY** fit the final output within a designated 2-page limit without using formatting tricks or artificial spacing.
 
@@ -66,11 +71,11 @@ GOAL: Reach 98–100% ATS match score.
 
 COMMUNICATION RULES:
 - Always respond in natural first-person conversational style.
-- Directly address DeepSeek-V3.2.
+- Directly address DeepSeek V4 Pro.
 
 OUTPUT FORMAT (valid JSON only):
 {
-  "agents": { "primary": "Gemini 3.1 Pro", "auditor": "DeepSeek-V3.2" },
+  "agents": { "primary": "Gemini 3.1 Pro", "auditor": "DeepSeek V4 Pro" },
   "ats": {
     "score": 95,
     "feedback": "Discuss ONLY the strategy, what changes were made, and why. DO NOT output the actual resume content or bullet points here. The resume content MUST ONLY be in the modifications array.",
@@ -408,7 +413,7 @@ Return updated JSON now.`;
   }
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: GEMINI_MODEL,
     contents: userPrompt.trim(),
     config: {
       systemInstruction: systemInstruction.trim(),
@@ -431,3 +436,23 @@ Return updated JSON now.`;
     throw new Error("Failed to parse Gemini response.");
   }
 };
+// ─────────────────────────────────────────────────────────────────────────────
+// Precision-pipeline adapter — the provider-agnostic core lives in
+// precisionService.ts; this exposes Gemini as an LlmCall transport.
+// ─────────────────────────────────────────────────────────────────────────────
+export const geminiLlm = (apiKey: string): LlmCall =>
+  async (system, user, temperature, maxTokens) => {
+    const key = apiKey || (process.env.GEMINI_API_KEY as string);
+    if (!key) throw new Error("Gemini API Key missing.");
+    const ai = new GoogleGenAI({ apiKey: key });
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: user,
+      config: {
+        systemInstruction: system,
+        temperature,
+        maxOutputTokens: maxTokens,
+      },
+    });
+    return response.text || "";
+  };

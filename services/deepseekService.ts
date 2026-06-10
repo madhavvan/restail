@@ -1,5 +1,10 @@
 import OpenAI from "openai";
 import { TailoredResumeData } from "../types";
+import type { LlmCall } from "./precisionService";
+
+// deepseek-chat / deepseek-reasoner are deprecated 2026-07-24 — V4 Pro is the
+// current flagship per api-docs.deepseek.com (verified 2026-06-10)
+const DEEPSEEK_MODEL = "deepseek-v4-pro";
 
 export const createOptimizationPlanDeepSeek = async (
   resumeText: string,
@@ -15,16 +20,16 @@ export const createOptimizationPlanDeepSeek = async (
     dangerouslyAllowBrowser: true 
   });
 
-  const partnerName = writerModelName || 'GPT-5.2';
+  const partnerName = writerModelName || 'GPT-5.5';
 
   const response = await deepseek.chat.completions.create({
-    model: "deepseek-reasoner",
+    model: DEEPSEEK_MODEL,
     temperature: 0.7,
     max_tokens: 32000,
     messages: [
       { 
         role: "system", 
-        content: `You are DeepSeek-V3.2, the Critical Reviewer working with ${partnerName}.
+        content: `You are DeepSeek V4 Pro, the Critical Reviewer working with ${partnerName}.
 You are an Elite Resume Copywriter and ATS Strategist with 30+ years of top-tier experience in IT systems, AI, and Data Engineering.
 Your goal is to rewrite the provided resume to perfectly match the Job Description with absolute authority and "mouth-shutting" impact.
 The points you write must be breathtakingly powerful, demonstrating unparalleled expertise and leadership.
@@ -77,18 +82,18 @@ export const tailorResumeDeepSeek = async (
   const maxAllowedChars = Math.floor(originalCharCount * 1.00); // budget allows complete sentences
 
   let systemPrompt = `
-You are DeepSeek-V3.2 - Critical ATS Auditor, Elite Executive Resume Writer, and Formatting Expert with 30+ years of top-tier experience in IT systems, AI, and Data Engineering.
+You are DeepSeek V4 Pro - Critical ATS Auditor, Elite Executive Resume Writer, and Formatting Expert with 30+ years of top-tier experience in IT systems, AI, and Data Engineering.
 You are reviewing work from the Primary Writer.
 
 Your objective is to parse the user's provided resume, dramatically enhance the impact of the content, and **STRICTLY** fit the final output within a designated 2-page limit without using formatting tricks or artificial spacing.
 
 Be strict but constructive.
-Always speak directly to GPT-5.2.
+Always speak directly to GPT-5.5.
 The points you write must be breathtakingly powerful, demonstrating unparalleled expertise and leadership. They must be "mouth-shutting" in their impact.
 
 OUTPUT ONLY valid JSON:
 {
-  "agents": { "reviewer": "DeepSeek-V3.2", "optimizer": "GPT-5.2" },
+  "agents": { "reviewer": "DeepSeek V4 Pro", "optimizer": "GPT-5.5" },
   "ats": {
     "score": 95,
     "feedback": "Discuss ONLY the strategy, what changes were made, and why. DO NOT output the actual resume content or bullet points here. The resume content MUST ONLY be in the modifications array.",
@@ -293,7 +298,7 @@ Return updated JSON now.`;
   }
 
   const response = await deepseek.chat.completions.create({
-    model: "deepseek-reasoner",
+    model: DEEPSEEK_MODEL,
     temperature: 0.65,
     max_tokens: 32000,
     messages: [
@@ -316,3 +321,26 @@ Return updated JSON now.`;
     throw new Error("Failed to parse DeepSeek response.");
   }
 };
+// ─────────────────────────────────────────────────────────────────────────────
+// Precision-pipeline adapter — the provider-agnostic core lives in
+// precisionService.ts; this exposes DeepSeek as an LlmCall transport.
+// ─────────────────────────────────────────────────────────────────────────────
+export const deepseekLlm = (apiKey: string): LlmCall =>
+  async (system, user, temperature, maxTokens) => {
+    if (!apiKey) throw new Error("DeepSeek API Key missing.");
+    const deepseek = new OpenAI({
+      apiKey,
+      baseURL: "https://api.deepseek.com",
+      dangerouslyAllowBrowser: true,
+    });
+    const response = await deepseek.chat.completions.create({
+      model: DEEPSEEK_MODEL,
+      temperature,
+      max_tokens: Math.min(maxTokens, 32000),
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    return response.choices[0]?.message?.content ?? "";
+  };
