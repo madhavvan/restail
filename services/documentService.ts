@@ -1,4 +1,4 @@
-import { Modification } from '../types';
+import { Modification, ParagraphInfo } from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CDN Library Loaders
@@ -223,8 +223,11 @@ const isContactLine = (paragraph: Element): boolean => {
 
   primaryText = primaryText.trim();
 
-  // If the primary text (before break) itself looks like contact info → fully protected
-  if (primaryText && (
+  // If the primary text (before break) itself looks like contact info → fully protected.
+  // Length guard: real contact lines are short. Long paragraphs that merely
+  // mention "GitHub"/"LinkedIn" (e.g. a skills line "Git, GitHub, Jenkins…")
+  // are content, not contact info.
+  if (primaryText && primaryText.length <= 110 && (
     primaryText.includes('@') ||
     /\d{3}[-.\s]\d{3,}/.test(primaryText) ||
     /linkedin|github/i.test(primaryText)
@@ -236,8 +239,13 @@ const isContactLine = (paragraph: Element): boolean => {
   // The title part IS modifiable — applyReplacement() preserves the contact section.
   if (hasBreak) return false;
 
-  // No break — standalone paragraph. If it contains hyperlinks it's a pure contact line.
-  if (paragraph.getElementsByTagNameNS(W_NS, 'hyperlink').length > 0) return true;
+  // No break — standalone paragraph containing hyperlinks: protect only when
+  // it is short (a link row) or carries explicit contact markers. A long
+  // skills/bullet line that happens to include an auto-linked word stays editable.
+  if (paragraph.getElementsByTagNameNS(W_NS, 'hyperlink').length > 0) {
+    const t = (paragraph.textContent || '').replace(/\s+/g, ' ').trim();
+    if (t.length <= 110 || /@|linkedin\.com|github\.com|\d{3}[-.\s]\d{3,}/i.test(t)) return true;
+  }
 
   return false;
 };
@@ -366,7 +374,8 @@ const writeRunsWithBold = (
 const getParagraphText = (
   paragraph: Element
 ): { text: string; contactStartIdx: number } => {
-  const runs = Array.from(paragraph.getElementsByTagNameNS(W_NS, 'r'));
+  // Own runs only — skips textbox-nested paragraphs and mc:Fallback dupes.
+  const runs = ownRuns(paragraph);
   let text = '';
   let contactStartIdx = -1;
 
@@ -948,4 +957,202 @@ export const modifyAndDownloadDocx = async (
     console.error('[Download] Error:', err);
     alert('Failed to save document. Check the console (F12) for details.');
   }
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PRECISION PIPELINE — paragraph-ID protocol
+//
+// The legacy path above matches model-emitted text excerpts against paragraphs
+// with fuzzy fallbacks. The precision path eliminates matching entirely:
+// paragraphs are extracted WITH stable IDs (their index among all <w:p>
+// elements in document order), the model addresses edits by ID, and
+// application is exact. Both extraction and application enumerate <w:p> via
+// the same traversal, so IDs always line up.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+/** True if some ancestor of `node` (up to `stopAt`) satisfies `predicate`. */
+const hasAncestor = (
+  node: Node,
+  stopAt: Node | null,
+  predicate: (el: Element) => boolean
+): boolean => {
+  let cur = node.parentNode;
+  while (cur && cur !== stopAt) {
+    if (predicate(cur as Element)) return true;
+    cur = cur.parentNode;
+  }
+  return false;
+};
+
+/**
+ * Top-level <w:p> elements in document order. Includes table-cell paragraphs;
+ * EXCLUDES paragraphs nested inside another paragraph (text boxes / shapes —
+ * e.g. a name banner drawn in a w:drawing), which also appear duplicated in
+ * mc:AlternateContent fallbacks and would corrupt both IDs and text.
+ */
+const getAllParagraphElements = (xmlDoc: Document): Element[] =>
+  Array.from(xmlDoc.getElementsByTagNameNS(W_NS, 'p')).filter(
+    p => !hasAncestor(p, null, el => el.localName === 'p')
+  );
+
+/**
+ * The runs that belong to THIS paragraph: excludes runs inside nested
+ * paragraphs (text boxes) and runs inside mc:Fallback duplicates.
+ */
+const ownRuns = (paragraph: Element): Element[] =>
+  Array.from(paragraph.getElementsByTagNameNS(W_NS, 'r')).filter(
+    r => !hasAncestor(r, paragraph, el => el.localName === 'p' || el.localName === 'Fallback')
+  );
+
+/** Concatenated <w:t> text belonging directly to this paragraph — excludes
+ *  text inside nested textbox paragraphs and mc:Fallback duplicates (unlike
+ *  Node.textContent, which also picks up drawing position numbers). */
+const ownText = (paragraph: Element): string =>
+  Array.from(paragraph.getElementsByTagNameNS(W_NS, 't'))
+    .filter(t => !hasAncestor(t, paragraph, el => el.localName === 'p' || el.localName === 'Fallback'))
+    .map(t => t.textContent || '')
+    .join('');
+
+const loadDocumentXml = async (
+  buffer: ArrayBuffer
+): Promise<{ zip: any; xmlDoc: Document }> => {
+  const JSZip = await getJSZip();
+  const zip = await (JSZip as any).loadAsync(buffer);
+  const docFile = zip.file('word/document.xml');
+  if (!docFile) throw new Error('word/document.xml not found in this .docx archive.');
+  const xmlDoc = new DOMParser().parseFromString(await docFile.async('string'), 'text/xml');
+  return { zip, xmlDoc };
+};
+
+/** Visible text of model output: markdown cleaned, **bold** markers removed. */
+export const visibleTextOf = (s: string): string =>
+  cleanNewContent(s || '').replace(/\*\*/g, '');
+
+/**
+ * Extract the paragraph table: one row per <w:p>, with stable IDs and
+ * protection flags. Generic across resumes:
+ *   • empty paragraphs are locked (layout spacers),
+ *   • the first non-empty paragraph is locked (the candidate's name),
+ *   • contact/social lines are locked (same detection the legacy engine uses),
+ *   • mixed title+contact paragraphs stay editable — `text` holds only the
+ *     editable part before the contact soft-break; the contact section is
+ *     preserved automatically by applyReplacement().
+ */
+/** Candidate-name heuristic: short, letters-only line near the top
+ *  ("VENU MADHAV PENTALA", "John Smith") — never offered for editing. */
+const looksLikeName = (text: string): boolean =>
+  text.length > 0 &&
+  text.length <= 48 &&
+  !/[\d@|,:;/\\]/.test(text) &&
+  /^[\p{L}.\-'\s]+$/u.test(text) &&
+  text.trim().split(/\s+/).length >= 2;
+
+export const extractParagraphTable = async (
+  buffer: ArrayBuffer
+): Promise<ParagraphInfo[]> => {
+  const { xmlDoc } = await loadDocumentXml(buffer);
+  const paras = getAllParagraphElements(xmlDoc);
+
+  let nonEmptySeen = 0;
+  return paras.map((p, id) => {
+    const fullText = ownText(p).replace(/\s+/g, ' ').trim();
+    const { text: beforeContact } = getParagraphText(p);
+    const editable = beforeContact.replace(/\s+/g, ' ').trim();
+
+    let locked = false;
+    let lockReason: ParagraphInfo['lockReason'];
+    if (!fullText) {
+      locked = true; lockReason = 'empty';
+    } else {
+      nonEmptySeen++;
+      // Name lock: only the first two non-empty paragraphs are candidates —
+      // the candidate's name is virtually always there; anything later that
+      // merely looks name-ish (e.g. an ALL-CAPS section header) stays editable.
+      if (nonEmptySeen <= 2 && looksLikeName(fullText)) {
+        locked = true; lockReason = 'name';
+      } else if (isContactLine(p)) {
+        locked = true; lockReason = 'contact';
+      }
+    }
+
+    return {
+      id,
+      text: locked ? fullText : (editable || fullText),
+      fullText,
+      locked,
+      lockReason,
+      lines: 0,
+      maxChars: 0,
+    };
+  });
+};
+
+/**
+ * Apply ID-addressed modifications. No fuzzy matching — a mod either targets
+ * a real, unlocked paragraph or it is skipped with a warning.
+ * Empty new_content deletes the paragraph (bullet-merge case); deletions are
+ * deferred so IDs remain valid for the whole batch.
+ */
+export const applyModificationsByIdToBuffer = async (
+  originalBuffer: ArrayBuffer,
+  modifications: Modification[],
+  lockedIds?: Set<number>
+): Promise<{ buffer: ArrayBuffer; applied: number; warnings: string[] }> => {
+  const warnings: string[] = [];
+  if (!modifications?.length) {
+    return { buffer: originalBuffer, applied: 0, warnings };
+  }
+
+  const { zip, xmlDoc } = await loadDocumentXml(originalBuffer);
+  const paras = getAllParagraphElements(xmlDoc);
+  const toDelete: Element[] = [];
+  let applied = 0;
+
+  for (const mod of modifications) {
+    const pid = mod.paragraph_id;
+    if (pid == null || !Number.isInteger(pid) || pid < 0 || pid >= paras.length) {
+      warnings.push(`Skipped mod with invalid paragraph_id=${pid}`);
+      continue;
+    }
+    if (lockedIds?.has(pid)) {
+      warnings.push(`Skipped mod targeting locked paragraph ${pid}`);
+      continue;
+    }
+    const p = paras[pid];
+    const newContent = mod.new_content ?? '';
+
+    if (newContent.trim() === '') {
+      toDelete.push(p);
+      applied++;
+      continue;
+    }
+
+    const { text } = getParagraphText(p);
+    const editableText = text.trim() || (p.textContent || '').trim();
+    applyReplacement(p, xmlDoc, editableText, newContent, true);
+    applied++;
+  }
+
+  toDelete.forEach(p => p.parentNode?.removeChild(p));
+
+  removeTrailingEmptyParagraphs(xmlDoc);
+  applyAutoFormatting(xmlDoc);
+
+  zip.file('word/document.xml', new XMLSerializer().serializeToString(xmlDoc));
+  const blob: Blob = await zip.generateAsync({ type: 'blob' });
+  const buffer = await blob.arrayBuffer();
+  console.log(`[PrecisionDoc] ${applied}/${modifications.length} mods applied by ID`, warnings);
+  return { buffer, applied, warnings };
+};
+
+/** Save an already-final buffer (the exact verified bytes) as a .docx download. */
+export const saveBufferAsDocx = async (
+  buffer: ArrayBuffer,
+  fileName = 'Tailored_Resume.docx'
+): Promise<void> => {
+  const saveAs = await getSaveAs();
+  saveAs(new Blob([buffer], { type: DOCX_MIME }), fileName);
 };

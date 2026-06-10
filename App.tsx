@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Step, TailoredResumeData, AppSettings } from './types';
+import { Step, TailoredResumeData, AppSettings, Modification, ParagraphInfo } from './types';
 import FileUpload from './components/FileUpload';
 import ResumePreview from './components/ResumePreview';
 import SmoothDocumentPreview from './components/SmoothDocumentPreview';
@@ -7,8 +7,16 @@ import SettingsModal from './components/SettingsModal';
 import { tailorResumeOpenAI, createOptimizationPlan } from './services/openaiService';
 import { tailorResumeDeepSeek, createOptimizationPlanDeepSeek } from './services/deepseekService';
 import { tailorResumeGemini, createOptimizationPlanGemini } from './services/geminiService';
-import { tailorResumeClaude, createOptimizationPlanClaude } from './services/claudeService';
-import { applyModificationsToBuffer } from './services/documentService';
+import {
+  tailorResumeClaude, createOptimizationPlanClaude,
+  extractJdKeywordsClaude, tailorResumeClaudePrecision, EngineFindings,
+} from './services/claudeService';
+import {
+  applyModificationsToBuffer, extractParagraphTable,
+  applyModificationsByIdToBuffer, visibleTextOf,
+} from './services/documentService';
+import { measureDocxBuffer } from './services/docxRender';
+import { scoreTextAgainstKeywords, composeModifiedText } from './services/atsScore';
 import ReactMarkdown from 'react-markdown';
 import {
   FileText, Briefcase, Wand2, ArrowRight, Settings, Undo,
@@ -32,6 +40,7 @@ const loadDocxPreview = (): Promise<{ renderAsync: Function }> => {
     document.head.appendChild(link);
   }
 
+  // @ts-ignore — runtime ESM URL import (no local type declarations)
   _docxPreviewPromise = (import('https://esm.sh/docx-preview@0.3.3') as Promise<any>)
     .then(mod => {
       const renderAsync = mod.renderAsync ?? mod.default?.renderAsync;
@@ -299,6 +308,9 @@ const App: React.FC = () => {
   const [liveDocBuffer, setLiveDocBuffer]       = useState<ArrayBuffer | null>(null);
   const [liveModifications, setLiveModifications] = useState<any[]>([]);
   const [isDocUpdating, setIsDocUpdating]       = useState(false);
+  /** Exact verified bytes of the final document (precision pipeline) —
+   *  downloads serve THIS buffer, never a re-application. */
+  const [finalBuffer, setFinalBuffer]           = useState<ArrayBuffer | null>(null);
 
   const [agentLogs, setAgentLogs] = useState<Array<{ id: string; agent: string; message: string; ts: Date }>>([]);
   const [thinking, setThinking]   = useState<{ agent: string; action: string } | null>(null);
@@ -331,6 +343,20 @@ const App: React.FC = () => {
         setSettings(p);
         settingsRef.current = p;
       } catch {}
+    }
+  }, []);
+
+  // Dev-only test hook: exposes the deterministic core for headless validation
+  // (paragraph extraction, layout measurement, keyword scoring) without API calls.
+  useEffect(() => {
+    if ((import.meta as any).env?.DEV) {
+      (window as any).__restail = {
+        extractParagraphTable,
+        measureDocxBuffer,
+        applyModificationsByIdToBuffer,
+        scoreTextAgainstKeywords,
+        visibleTextOf,
+      };
     }
   }, []);
 
@@ -393,9 +419,22 @@ const App: React.FC = () => {
     }
   };
 
+  // ── Buffer application — routes by mod addressing mode ────────────────────
+  // Mods carrying paragraph_id use the exact ID-addressed engine (precision
+  // pipeline); legacy excerpt mods keep the fuzzy matcher.
+  const applyBufferMods = async (mods: any[], isFinalRound = false): Promise<ArrayBuffer | null> => {
+    if (!originalFileBuffer || !mods?.length) return null;
+    const usesIds = mods.some(m => m.paragraph_id != null);
+    if (usesIds) {
+      const { buffer } = await applyModificationsByIdToBuffer(originalFileBuffer.slice(0), mods);
+      return buffer;
+    }
+    return applyModificationsToBuffer(originalFileBuffer.slice(0), mods, isFinalRound);
+  };
+
   // ── Apply modifications ONE AT A TIME (token-by-token) ────────────────────
-  const applyModsSequentially = async (mods: any[]) => {
-    if (!originalFileBuffer || !mods?.length) return;
+  const applyModsSequentially = async (mods: any[]): Promise<ArrayBuffer | null> => {
+    if (!originalFileBuffer || !mods?.length) return null;
     setTotalModCount(mods.length);
     setAppliedModCount(0);
     setLiveModifications([]);
@@ -403,38 +442,42 @@ const App: React.FC = () => {
     for (let i = 0; i < mods.length; i++) {
       if (cancelRef.current) break;
       const subset = mods.slice(0, i + 1);
-      
+
       setLiveModifications(subset);
       setAppliedModCount(i + 1);
-      
+
       // Calculate delay based on length to simulate typing
       const newContentLen = mods[i].new_content.length;
       const delay = Math.min(Math.max(newContentLen * 15, 400), 2500);
       await new Promise(r => setTimeout(r, delay));
     }
-    
+
     // After all mods are applied visually, update the actual DOCX buffer
     setIsDocUpdating(true);
     try {
-      const newBuf = await applyModificationsToBuffer(originalFileBuffer.slice(0), mods);
-      setLiveDocBuffer(newBuf);
+      const newBuf = await applyBufferMods(mods);
+      if (newBuf) setLiveDocBuffer(newBuf);
       setLiveModifications([]); // Switch back to DocxPreviewPane
+      return newBuf;
     } catch (e) {
       console.error(`Final mod apply failed:`, e);
+      return null;
     } finally {
       setIsDocUpdating(false);
     }
   };
 
   // ── Bulk update (fallback for final pass) ──
-  const updateLiveDoc = async (mods: any[], isFinalRound = false) => {
-    if (!originalFileBuffer || !mods?.length) return;
+  const updateLiveDoc = async (mods: any[], isFinalRound = false): Promise<ArrayBuffer | null> => {
+    if (!originalFileBuffer || !mods?.length) return null;
     setIsDocUpdating(true);
     try {
-      const newBuf = await applyModificationsToBuffer(originalFileBuffer.slice(0), mods, isFinalRound);
-      setLiveDocBuffer(newBuf);
+      const newBuf = await applyBufferMods(mods, isFinalRound);
+      if (newBuf) setLiveDocBuffer(newBuf);
+      return newBuf;
     } catch (e) {
       console.error('Live doc update failed:', e);
+      return null;
     } finally {
       setIsDocUpdating(false);
     }
@@ -642,12 +685,409 @@ const App: React.FC = () => {
     setThinking(null);
     setRetryPrompt(null);
     setStep(Step.UPLOAD);
+    setFinalBuffer(null);
     setAgentLogs([]);
     setLiveAtsScore(0);
     setAppliedModCount(0);
     setTotalModCount(0);
     if (originalFileBuffer) setLiveDocBuffer(originalFileBuffer.slice(0));
     setTimeout(() => { cancelRef.current = false; }, 100);
+  };
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // PRECISION PIPELINE (Claude writer)
+  //
+  // Code does geometry, the model does wording:
+  //   1. Parse paragraphs with stable IDs + measure the REAL rendered layout
+  //      (pages, per-paragraph line counts) — that page count becomes the
+  //      locked target for whatever resume was uploaded.
+  //   2. Extract JD keywords once; score coverage deterministically (the UI
+  //      shows measured percentages, never model self-grades).
+  //   3. Model writes ID-addressed mods under per-paragraph char budgets.
+  //   4. Engine applies, RENDERS, and measures; violations/offenders bounce
+  //      back with exact findings; paragraphs that can't be fixed revert to
+  //      their original text — layout is guaranteed, never "hope it fits".
+  // ───────────────────────────────────────────────────────────────────────────
+  const runClaudePipeline = async () => {
+    const claudeKey = () => settingsRef.current.claudeApiKey;
+    if (!claudeKey()) throw new Error('Claude API key missing — add it in Settings.');
+    if (!originalFileBuffer) throw new Error('Original .docx buffer missing — please re-upload the file.');
+
+    const primaryName = 'Claude Sonnet 4.6';
+    const fbProvider = settingsRef.current.feedbackProvider || 'deepseek';
+    const reviewerName = providerLabel(fbProvider);
+    const getApiKey = (p: string) => {
+      if (p === 'openai')   return settingsRef.current.openaiApiKey;
+      if (p === 'deepseek') return settingsRef.current.deepseekApiKey;
+      if (p === 'gemini')   return settingsRef.current.geminiApiKey;
+      if (p === 'claude')   return settingsRef.current.claudeApiKey;
+      return '';
+    };
+
+    addLog('SYSTEM', `Precision pipeline engaged. ${primaryName} ⇆ ${reviewerName} connected.`);
+
+    // ── 1 · Geometry: paragraph table + real rendered layout ────────────────
+    setThinking({ agent: primaryName, action: 'Parsing document geometry…' });
+    const paragraphs = await extractParagraphTable(originalFileBuffer.slice(0));
+    const baseline = await measureDocxBuffer(originalFileBuffer.slice(0));
+    setThinking(null);
+
+    // Align rendered <p> elements to XML paragraph IDs by text (two-pointer,
+    // document order). Stray rendered nodes (textbox banners etc.) get skipped.
+    const alignToDom = (
+      expected: Array<{ id: number; text: string }>,
+      m: typeof baseline
+    ) => {
+      const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+      const linesById = new Map<number, number>();
+      let j = 0, matched = 0, nonEmpty = 0;
+      for (const e of expected) {
+        const t = norm(e.text);
+        if (t) nonEmpty++;
+        let found = -1;
+        for (let k = j; k < Math.min(m.paraTexts.length, j + 6); k++) {
+          const d = norm(m.paraTexts[k]);
+          if (!t && !d) { found = k; break; }
+          if (t && d && (d.startsWith(t.slice(0, 30)) || t.startsWith(d.slice(0, 30)))) { found = k; break; }
+        }
+        if (found >= 0) {
+          if (t) matched++;
+          linesById.set(e.id, m.paraLines[found]);
+          j = found + 1;
+        }
+      }
+      return { linesById, reliable: nonEmpty > 0 && matched / nonEmpty >= 0.9 };
+    };
+
+    const baseAlign = alignToDom(paragraphs.map(p => ({ id: p.id, text: p.fullText })), baseline);
+    const mapReliable = baseAlign.reliable;
+    const targetPages = Math.max(1, baseline.pages);
+    const baseHeight = baseline.contentHeight;
+    const lineH = baseline.lineHeight || 16;
+
+    paragraphs.forEach(p => {
+      p.lines = Math.max(1, baseAlign.linesById.get(p.id) ?? Math.ceil((p.text.length || 1) / 110));
+    });
+    // Empirical 1-line capacity: the longest paragraph that renders on one
+    // line tells us roughly how many chars a line fits in THIS template.
+    const oneLineLens = paragraphs.filter(p => !p.locked && p.lines === 1).map(p => p.text.length);
+    const cap1 = oneLineLens.length ? Math.max(...oneLineLens) : 110;
+    paragraphs.forEach(p => {
+      if (p.locked) { p.maxChars = p.text.length; return; }
+      if (p.lines <= 1)      p.maxChars = Math.max(p.text.length + 2, Math.min(cap1 - 6, p.text.length + 30));
+      else if (p.lines === 2) p.maxChars = p.text.length + 10;
+      else                    p.maxChars = p.text.length + 20;
+    });
+
+    const lockedIds = new Set(paragraphs.filter(p => p.locked).map(p => p.id));
+    const editableCount = paragraphs.length - lockedIds.size;
+    addLog('SYSTEM',
+      `Geometry locked: ${paragraphs.length} paragraphs (${editableCount} editable) · renders exactly ${targetPages} page(s)` +
+      (mapReliable ? ' · per-line verification active.' : ' · page-level verification active.'));
+    if (cancelRef.current) return;
+
+    // ── 2 · JD keywords + measured baseline ─────────────────────────────────
+    setThinking({ agent: primaryName, action: 'Extracting JD keyword matrix…' });
+    const keywords = await withRetry(() => extractJdKeywordsClaude(jobDescription, claudeKey()), primaryName);
+    setThinking(null);
+    if (cancelRef.current) return;
+
+    const originalTexts = paragraphs.map(p => p.fullText);
+    const base = scoreTextAgainstKeywords(originalTexts.join('\n'), keywords);
+    setLiveAtsScore(base.score);
+    addLog('SYSTEM', `Deterministic ATS baseline: ${base.score}% (${base.matched.length}/${keywords.length} JD keywords present).`);
+    if (cancelRef.current) return;
+
+    // ── 3 · Plan + critical review (the dual-agent conversation) ────────────
+    const introMsg = `I parsed the document into ${editableCount} editable paragraphs and measured a ${base.score}% keyword baseline against this JD.\nPreparing the optimization plan…`;
+    addLog(primaryName, introMsg);
+    await awaitTyping(introMsg);
+    if (cancelRef.current) return;
+
+    setThinking({ agent: primaryName, action: 'Building optimization plan…' });
+    const plan = await withRetry(() => createOptimizationPlanClaude(resumeText, jobDescription, claudeKey()), primaryName);
+    setThinking(null);
+    if (cancelRef.current) return;
+
+    const planMsg = `PROPOSED OPTIMIZATION PLAN:\n\n${plan}\n\n${reviewerName}, please review and give your critical feedback.`;
+    addLog(primaryName, planMsg);
+    await awaitTyping(planMsg);
+    if (cancelRef.current) return;
+
+    setThinking({ agent: reviewerName, action: 'Reviewing plan and cooking feedback…' });
+    const reviewerPlan = () => {
+      const fb = settingsRef.current.feedbackProvider || 'deepseek';
+      if (fb === 'deepseek') return createOptimizationPlanDeepSeek(resumeText, jobDescription, getApiKey('deepseek'), primaryName);
+      if (fb === 'openai')   return createOptimizationPlan(resumeText, jobDescription, getApiKey('openai'));
+      if (fb === 'claude')   return createOptimizationPlanClaude(resumeText, jobDescription, getApiKey('claude'));
+      return createOptimizationPlanGemini(resumeText, jobDescription, getApiKey('gemini'));
+    };
+    const reviewFeedback = await withRetry(reviewerPlan, reviewerName);
+    setThinking(null);
+    if (cancelRef.current) return;
+
+    const feedbackMsg = `REVIEW FEEDBACK:\n\n${reviewFeedback}`;
+    addLog(reviewerName, feedbackMsg);
+    await awaitTyping(feedbackMsg);
+    if (cancelRef.current) return;
+
+    // ── Pipeline helpers ─────────────────────────────────────────────────────
+    const byId = (list: Modification[]) => {
+      const m = new Map<number, Modification>();
+      list.forEach(x => { if (x.paragraph_id != null) m.set(x.paragraph_id, x); });
+      return m;
+    };
+    const sanitize = (list: Modification[]) => list.filter(m => {
+      if (m.paragraph_id == null || m.paragraph_id < 0 || m.paragraph_id >= paragraphs.length) return false;
+      if (lockedIds.has(m.paragraph_id)) return false;
+      const vis = visibleTextOf(m.new_content);
+      if (vis.trim() === '' && m.new_content.trim() !== '') return false; // markup-only garbage
+      if (vis.trim() === paragraphs[m.paragraph_id].text.trim()) return false; // no-op
+      return true;
+    });
+    const budgetViolations = (list: Modification[]) => list
+      .filter(m => m.new_content.trim() !== '')
+      .map(m => ({ paragraph_id: m.paragraph_id!, visibleLen: visibleTextOf(m.new_content).length, maxChars: paragraphs[m.paragraph_id!].maxChars }))
+      .filter(v => v.visibleLen > v.maxChars);
+    const dropViolators = (list: Modification[]) => {
+      const bad = new Set(budgetViolations(list).map(v => v.paragraph_id));
+      if (bad.size) addLog('SYSTEM', `↩️ Reverted ${bad.size} paragraph(s) to original text (budget could not be met).`);
+      return list.filter(m => !bad.has(m.paragraph_id!));
+    };
+    const enrich = (list: Modification[]) => list.map(m => ({
+      ...m,
+      original_excerpt: paragraphs[m.paragraph_id!].text,
+    }));
+    const mergeRepair = (current: Modification[], repair: Modification[]) => {
+      const merged = byId(current);
+      sanitize(repair).forEach(m => merged.set(m.paragraph_id!, m));
+      return [...merged.values()];
+    };
+    const analyzeLayout = async (buffer: ArrayBuffer, currentMods: Modification[]) => {
+      const metrics = await measureDocxBuffer(buffer);
+      const modMap = byId(currentMods);
+
+      // Expected post-modification text per surviving paragraph (deletions skipped)
+      const expected = paragraphs
+        .filter(p => {
+          const m = modMap.get(p.id);
+          return !(m && m.new_content.trim() === '');
+        })
+        .map(p => ({
+          id: p.id,
+          text: modMap.has(p.id) ? visibleTextOf(modMap.get(p.id)!.new_content) : p.fullText,
+        }));
+
+      const align = alignToDom(expected, metrics);
+      const offenders: EngineFindings['layoutOffenders'] = [];
+      if (mapReliable && align.reliable) {
+        for (const m of currentMods) {
+          const id = m.paragraph_id!;
+          if (m.new_content.trim() === '') continue;
+          const orig = paragraphs[id].lines;
+          const now = align.linesById.get(id);
+          if (now != null && now > orig) {
+            const curLen = visibleTextOf(m.new_content).length;
+            offenders.push({
+              paragraph_id: id,
+              lines: now,
+              originalLines: orig,
+              targetChars: Math.max(40, Math.floor((curLen * orig) / now) - 6),
+            });
+          }
+        }
+      }
+
+      // Exact, pagination-independent overflow signal: rendered content height.
+      const heightDeltaLines = (metrics.contentHeight - baseHeight) / lineH;
+      const overflow = heightDeltaLines > 0.6 || offenders.length > 0;
+      return { pages: metrics.pages, heightDeltaLines, overflow, offenders };
+    };
+    const silentApply = async (list: Modification[]): Promise<ArrayBuffer> => {
+      setIsDocUpdating(true);
+      try {
+        const { buffer } = await applyModificationsByIdToBuffer(originalFileBuffer.slice(0), list, lockedIds);
+        setLiveDocBuffer(buffer);
+        return buffer;
+      } finally {
+        setIsDocUpdating(false);
+      }
+    };
+    const rescues = (list: Modification[]) => scoreTextAgainstKeywords(composeModifiedText(originalTexts, list), keywords);
+
+    // ── 4 · Version 1.0 — ID-addressed write ────────────────────────────────
+    const ackMsg = `Acknowledged. Writing Version 1.0 — ID-addressed, budget-locked…`;
+    addLog(primaryName, ackMsg);
+    await awaitTyping(ackMsg);
+    if (cancelRef.current) return;
+
+    setThinking({ agent: primaryName, action: 'Writing Version 1.0 (precision mode)…' });
+    const v1 = await withRetry(
+      () => tailorResumeClaudePrecision(paragraphs, jobDescription, keywords, claudeKey(), {
+        round: 'write',
+        strategistNotes: reviewFeedback,
+      }),
+      primaryName
+    );
+    setThinking(null);
+    if (cancelRef.current) return;
+
+    let mods = sanitize(v1.modifications);
+
+    // ── 5 · Code-side budget gate (pre-render) ──────────────────────────────
+    const v1Violations = budgetViolations(mods);
+    if (v1Violations.length) {
+      addLog('SYSTEM', `⚠️ ${v1Violations.length} mod(s) exceed their hard budgets — engine findings sent back for repair.`);
+      setThinking({ agent: primaryName, action: `Repairing ${v1Violations.length} over-budget paragraph(s)…` });
+      const repair = await withRetry(
+        () => tailorResumeClaudePrecision(paragraphs, jobDescription, keywords, claudeKey(), {
+          round: 'repair',
+          previousModifications: mods,
+          findings: { budgetViolations: v1Violations, layoutOffenders: [] },
+        }),
+        primaryName
+      );
+      setThinking(null);
+      if (cancelRef.current) return;
+      mods = dropViolators(mergeRepair(mods, repair.modifications));
+    } else {
+      mods = dropViolators(mods);
+    }
+
+    // ── 6 · Apply with live animation, then RENDER-VERIFY ───────────────────
+    const v1Msg = `Version 1.0 complete — ${mods.length} modifications. Applying to your Word document one by one…`;
+    addLog(primaryName, v1Msg);
+    await awaitTyping(v1Msg);
+    let buf = await applyModsSequentially(enrich(mods));
+    if (cancelRef.current) return;
+    if (!buf) throw new Error('Failed to apply modifications to the document.');
+
+    let score = rescues(mods);
+    setLiveAtsScore(score.score);
+
+    addLog('SYSTEM', 'Rendering document for layout verification…');
+    let check = await analyzeLayout(buf, mods);
+    addLog('SYSTEM', `Render check: content ${check.heightDeltaLines >= 0 ? '+' : ''}${check.heightDeltaLines.toFixed(1)} line(s) vs original · ${check.offenders.length} paragraph(s) above original line count.`);
+
+    // ── 7 · Layout repair loop (engine findings → targeted condense) ────────
+    for (let round = 1; round <= 2 && !cancelRef.current; round++) {
+      if (!check.overflow) break;
+
+      addLog('SYSTEM', `⚠️ Layout repair round ${round}: content ${check.heightDeltaLines >= 0 ? '+' : ''}${check.heightDeltaLines.toFixed(1)} line(s) · ${check.offenders.length} offender(s). Engine findings sent back.`);
+      setThinking({ agent: primaryName, action: 'Condensing measured overflow…' });
+      const repair = await withRetry(
+        () => tailorResumeClaudePrecision(paragraphs, jobDescription, keywords, claudeKey(), {
+          round: 'repair',
+          previousModifications: mods,
+          findings: {
+            budgetViolations: [],
+            layoutOffenders: check.offenders,
+            pages: { current: check.pages, target: targetPages },
+          },
+        }),
+        primaryName
+      );
+      setThinking(null);
+      if (cancelRef.current) return;
+
+      mods = dropViolators(mergeRepair(mods, repair.modifications));
+      buf = await silentApply(enrich(mods));
+      check = await analyzeLayout(buf, mods);
+      addLog('SYSTEM', `Render re-check: content ${check.heightDeltaLines >= 0 ? '+' : ''}${check.heightDeltaLines.toFixed(1)} line(s) · ${check.offenders.length} offender(s).`);
+    }
+
+    // ── 8 · Deterministic layout guarantee — revert what cannot be fixed ────
+    let guardRounds = 0;
+    while (check.overflow && mods.length > 0 && guardRounds < 10) {
+      guardRounds++;
+      const revertIds = new Set<number>(check.offenders.map(o => o.paragraph_id));
+      if (revertIds.size === 0) {
+        // Height overflow without per-paragraph mapping — revert the largest growers.
+        [...mods]
+          .map(m => ({ id: m.paragraph_id!, growth: visibleTextOf(m.new_content).length - paragraphs[m.paragraph_id!].text.length }))
+          .sort((a, b) => b.growth - a.growth)
+          .slice(0, 3)
+          .forEach(x => revertIds.add(x.id));
+      }
+      mods = mods.filter(m => !revertIds.has(m.paragraph_id!));
+      buf = await silentApply(enrich(mods));
+      check = await analyzeLayout(buf, mods);
+      addLog('SYSTEM', `↩️ Layout guarantee: reverted ${revertIds.size} paragraph(s) → content ${check.heightDeltaLines >= 0 ? '+' : ''}${check.heightDeltaLines.toFixed(1)} line(s).`);
+    }
+
+    score = rescues(mods);
+    setLiveAtsScore(score.score);
+
+    // ── 9 · Coverage sweeps — place still-missing keywords, layout-gated ────
+    for (let sweep = 1; sweep <= 2 && score.missing.length > 0 && !check.overflow && !cancelRef.current; sweep++) {
+      addLog('SYSTEM', `Coverage sweep ${sweep}: ${score.missing.length} JD keyword(s) still unplaced → targeted refinement.`);
+      setThinking({ agent: primaryName, action: `Placing ${score.missing.length} missing keyword(s)…` });
+      const refine = await withRetry(
+        () => tailorResumeClaudePrecision(paragraphs, jobDescription, keywords, claudeKey(), {
+          round: 'repair',
+          previousModifications: mods,
+          findings: {
+            budgetViolations: [],
+            layoutOffenders: [],
+            pages: { current: check.pages, target: targetPages },
+            missingKeywords: score.missing,
+          },
+        }),
+        primaryName
+      );
+      setThinking(null);
+      if (cancelRef.current) return;
+
+      const candidate = dropViolators(mergeRepair(mods, refine.modifications));
+      const newBuf = await silentApply(enrich(candidate));
+      const newCheck = await analyzeLayout(newBuf, candidate);
+      const newScore = rescues(candidate);
+      if (!newCheck.overflow && newScore.score > score.score) {
+        mods = candidate;
+        buf = newBuf;
+        check = newCheck;
+        score = newScore;
+        setLiveAtsScore(score.score);
+        addLog('SYSTEM', `Coverage sweep ${sweep} verified clean → ${score.score}% measured.`);
+      } else if (newCheck.overflow) {
+        buf = await silentApply(enrich(mods)); // restore the verified version
+        addLog('SYSTEM', `Coverage sweep ${sweep} would have broken layout (content +${newCheck.heightDeltaLines.toFixed(1)} line(s), ${newCheck.offenders.length} offender(s)) — kept the verified version.`);
+        break;
+      } else {
+        buf = await silentApply(enrich(mods)); // no improvement — keep verified version
+        addLog('SYSTEM', `Coverage sweep ${sweep} did not improve the measured score — kept the verified version.`);
+        break;
+      }
+    }
+
+    // ── 10 · Finalize with measured numbers ──────────────────────────────────
+    const finalMods = enrich(mods);
+    const data: TailoredResumeData = {
+      agents: { primary: primaryName, auditor: reviewerName },
+      ats: {
+        score: score.score,
+        measured: true,
+        feedback:
+          `Measured by deterministic keyword scan: ${score.matched.length}/${keywords.length} JD keywords present ` +
+          `(weighted ${score.score}%, up from ${base.score}%). Layout render-verified: content height within ` +
+          `${Math.abs(check.heightDeltaLines).toFixed(1)} line(s) of the original ${targetPages}-page document. ${v1.feedback}`.trim(),
+        keywordMatch: score.matched,
+        missingKeywords: score.missing,
+      },
+      modifications: finalMods,
+    };
+
+    setFinalBuffer(buf);
+    setLiveDocBuffer(buf);
+
+    const doneMsg = `FINAL — ${finalMods.length} modifications, every one verified.\nMeasured ATS coverage: ${base.score}% → ${score.score}%.\nLayout: render-verified, content within ${Math.abs(check.heightDeltaLines).toFixed(1)} line(s) of the original ${targetPages}-page layout.`;
+    addLog(primaryName, doneMsg);
+    await awaitTyping(doneMsg);
+    addLog('SYSTEM', `🎉 Done! ${finalMods.length} modifications ready. Preparing download…`);
+    await new Promise(r => setTimeout(r, 900));
+
+    setTailoredData(data);
+    setStep(Step.PREVIEW);
   };
 
   const handleTailorClick = async () => {
@@ -662,21 +1102,27 @@ const App: React.FC = () => {
     setTotalModCount(0);
     cancelRef.current = false;
     userScrolledUpRef.current = false;
+    setFinalBuffer(null);
     setStep(Step.ANALYZING);
     if (originalFileBuffer) setLiveDocBuffer(originalFileBuffer.slice(0));
 
     try {
+      // ── Claude writer → precision pipeline (ID protocol + render loop) ──
+      if (settingsRef.current.activeProvider === 'claude') {
+        await runClaudePipeline();
+        return;
+      }
+
       let data: TailoredResumeData = { agents: {} as any, modifications: [] };
       const provider = settingsRef.current.activeProvider;
 
+      // (claude routes to runClaudePipeline above — legacy flow serves the rest)
       let primaryName  = 'GPT-5.2';
       let reviewerName = 'DeepSeek-V3.2';
       if (provider === 'deepseek') {
         primaryName  = 'DeepSeek-V3.2';
       } else if (provider === 'gemini') {
         primaryName  = 'Gemini 3.1 Pro';
-      } else if (provider === 'claude') {
-        primaryName  = 'Claude Sonnet 4.6';
       }
 
       // Dynamic feedback model from settings
@@ -911,6 +1357,7 @@ const App: React.FC = () => {
     setOriginalFile(null);
     setOriginalFileBuffer(null);
     setLiveDocBuffer(null);
+    setFinalBuffer(null);
     setJobDescription('');
     setError(null);
     setAgentLogs([]);
@@ -1465,6 +1912,7 @@ const App: React.FC = () => {
             originalFile={originalFile}
             originalFileBuffer={originalFileBuffer}
             originalText={resumeText}
+            finalBuffer={finalBuffer}
           />
         </main>
       )}

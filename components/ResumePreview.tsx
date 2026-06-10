@@ -3,15 +3,21 @@ import { TailoredResumeData } from '../types';
 import {
   Download, Bot, BrainCircuit, Search, PenTool, CheckCircle,
   Lightbulb, ArrowRight, FileCheck, AlertOctagon, FileText,
-  ShieldCheck, Tag, XCircle,
+  ShieldCheck, Tag, XCircle, FileDown,
 } from 'lucide-react';
-import { modifyAndDownloadDocx } from '../services/documentService';
+import {
+  modifyAndDownloadDocx, saveBufferAsDocx, applyModificationsToBuffer,
+} from '../services/documentService';
+import { exportBufferAsPdf } from '../services/docxRender';
 
 interface ResumePreviewProps {
   data: TailoredResumeData;
   originalFile: File | null;
   originalFileBuffer: ArrayBuffer | null;
   originalText: string;
+  /** Exact verified bytes from the precision pipeline. When present, downloads
+   *  serve THIS buffer — never a re-application that could diverge. */
+  finalBuffer?: ArrayBuffer | null;
 }
 
 const ResumePreview: React.FC<ResumePreviewProps> = ({
@@ -19,11 +25,23 @@ const ResumePreview: React.FC<ResumePreviewProps> = ({
   originalFile,
   originalFileBuffer,
   originalText,
+  finalBuffer,
 }) => {
   const [activeTab, setActiveTab] = useState<'agents' | 'modifications' | 'livedoc'>('agents');
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
-  // ── Download handler ──────────────────────────────────────────────────────
+  const baseName = (originalFile?.name || 'Resume').replace(/\.docx$/i, '');
+
+  /** The final document bytes: the verified buffer when available (precision
+   *  pipeline), otherwise a fresh application of the mods (legacy providers). */
+  const resolveFinalBuffer = async (): Promise<ArrayBuffer | null> => {
+    if (finalBuffer) return finalBuffer;
+    if (!originalFileBuffer) return null;
+    return applyModificationsToBuffer(originalFileBuffer.slice(0), data.modifications, true);
+  };
+
+  // ── Download handlers ─────────────────────────────────────────────────────
   const handleDownload = async () => {
     if (!originalFile || !originalFileBuffer) {
       alert('Original file missing. Please re-upload.');
@@ -31,12 +49,34 @@ const ResumePreview: React.FC<ResumePreviewProps> = ({
     }
     setIsDownloading(true);
     try {
-      const freshFile = new File([originalFileBuffer], originalFile.name, {
-        type: originalFile.type,
-      });
-      await modifyAndDownloadDocx(freshFile, data.modifications, 'Tailored_Resume.docx');
+      if (finalBuffer) {
+        await saveBufferAsDocx(finalBuffer, `${baseName}_Tailored.docx`);
+      } else {
+        const freshFile = new File([originalFileBuffer], originalFile.name, {
+          type: originalFile.type,
+        });
+        await modifyAndDownloadDocx(freshFile, data.modifications, `${baseName}_Tailored.docx`);
+      }
     } finally {
       setIsDownloading(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setIsExportingPdf(true);
+    try {
+      const buf = await resolveFinalBuffer();
+      if (!buf) {
+        alert('Original file missing. Please re-upload.');
+        return;
+      }
+      // Text-based PDF via the browser's print engine (choose "Save as PDF").
+      await exportBufferAsPdf(buf.slice(0), `${baseName}_Tailored`);
+    } catch (e: any) {
+      console.error('[PDF export]', e);
+      alert(`PDF export failed: ${e?.message ?? 'unknown error'}`);
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
@@ -174,19 +214,34 @@ const ResumePreview: React.FC<ResumePreviewProps> = ({
           </div>
         </div>
 
-        {/* Download button */}
-        <button
-          onClick={handleDownload}
-          disabled={isDownloading}
-          className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold transition-all shadow-md whitespace-nowrap ${
-            isDownloading
-              ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-              : 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-lg hover:-translate-y-0.5'
-          }`}
-        >
-          <Download className="w-5 h-5" />
-          {isDownloading ? 'Saving…' : 'Download DOCX'}
-        </button>
+        {/* Download buttons */}
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={handleDownload}
+            disabled={isDownloading}
+            className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold transition-all shadow-md whitespace-nowrap ${
+              isDownloading
+                ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                : 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-lg hover:-translate-y-0.5'
+            }`}
+          >
+            <Download className="w-5 h-5" />
+            {isDownloading ? 'Saving…' : 'Download DOCX'}
+          </button>
+          <button
+            onClick={handleDownloadPdf}
+            disabled={isExportingPdf}
+            title='Opens your browser print dialog — choose "Save as PDF". Output stays text-based (ATS-readable).'
+            className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all shadow-sm whitespace-nowrap border-2 ${
+              isExportingPdf
+                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                : 'bg-white text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50 hover:-translate-y-0.5'
+            }`}
+          >
+            <FileDown className="w-5 h-5" />
+            {isExportingPdf ? 'Preparing…' : 'Download PDF'}
+          </button>
+        </div>
       </div>
 
       {/* ── Tabs ─────────────────────────────────────────────────────────── */}
