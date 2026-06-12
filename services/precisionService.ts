@@ -26,7 +26,14 @@ export const extractJsonBlock = (raw: string, open: string, close: string): stri
   const b = cleaned.lastIndexOf(close);
   if (a === -1 || b === -1 || b < a) {
     console.error("Raw response (first 500 chars):", raw.substring(0, 500));
-    throw new Error("No JSON found in model response.");
+    // Put what actually came back into the error — it surfaces in the chat
+    // log, so failures are diagnosable without opening DevTools.
+    const head = cleaned.slice(0, 160).replace(/\s+/g, " ");
+    throw new Error(
+      cleaned.length === 0
+        ? "Model returned an empty response (often: the token budget was consumed by reasoning before any answer was written)."
+        : `No JSON found in model response. It returned ${cleaned.length} chars starting: "${head}…"`
+    );
   }
   return cleaned.substring(a, b + 1);
 };
@@ -52,12 +59,16 @@ Rules:
 - Terms must be matchable substrings likely to appear verbatim in a resume — no full sentences, no vague duties.
 - Lowercase everything.`;
 
+  // 16K, not the ~3K the JSON needs: on reasoning models (DeepSeek V4 Pro,
+  // Grok, Gemini thinking) max_tokens also covers the chain of thought, and a
+  // 4K budget can be fully consumed by reasoning — yielding an empty answer.
   const result = await call(
     system,
     `JOB DESCRIPTION:\n${jobDescription}\n\nReturn the JSON array now. First character [ and last character ].`,
     0,
-    4000
+    16000
   );
+  if (!result) throw new Error("No response from model during keyword extraction.");
 
   const arr = JSON.parse(extractJsonBlock(result, "[", "]")) as KeywordSpec[];
   return (Array.isArray(arr) ? arr : [])

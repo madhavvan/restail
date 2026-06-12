@@ -448,13 +448,19 @@ export const geminiLlm = (apiKey: string): LlmCall =>
     const ai = new GoogleGenAI({ apiKey: key });
     // Thinking-class models reject non-default sampling params — omit
     // temperature; pipeline determinism is enforced by code-side validation.
+    // Thinking shares maxOutputTokens — floor it so reasoning can't starve
+    // the final answer.
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
       contents: user,
       config: {
         systemInstruction: system,
-        maxOutputTokens: maxTokens,
+        maxOutputTokens: Math.max(maxTokens, 16000),
       },
     });
-    return response.text || "";
+    const text = response.text || "";
+    if (!text.trim() && response.candidates?.[0]?.finishReason === "MAX_TOKENS") {
+      throw new Error("Gemini hit its token limit while still thinking — no final answer was produced. Retry.");
+    }
+    return text;
   };

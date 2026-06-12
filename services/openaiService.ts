@@ -454,5 +454,9 @@ export const openaiLlm = (apiKey: string): LlmCall =>
         { role: "user", content: user },
       ],
     });
-    return response.choices[0]?.message?.content ?? "";
+    const choice = response.choices[0];
+    if (choice?.finish_reason === "length" && !choice?.message?.content?.trim()) {
+      throw new Error("GPT hit its token limit before producing an answer. Retry.");
+    }
+    return choice?.message?.content ?? "";
   };

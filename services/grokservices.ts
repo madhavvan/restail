@@ -21,15 +21,21 @@ export const grokLlm = (apiKey: string): LlmCall =>
   async (system, user, _temperature, maxTokens) => {
     if (!apiKey) throw new Error("Grok API Key missing.");
     // Reasoning-class models restrict sampling params — omit temperature.
+    // Reasoning shares the token budget — floor it so thinking can't starve
+    // the final answer.
     const response = await grokClient(apiKey).chat.completions.create({
       model: GROK_MODEL,
-      max_tokens: Math.min(maxTokens, 32000),
+      max_tokens: Math.min(Math.max(maxTokens, 16000), 32000),
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
       ],
     });
-    return response.choices[0]?.message?.content ?? "";
+    const choice = response.choices[0];
+    if (choice?.finish_reason === "length" && !choice?.message?.content?.trim()) {
+      throw new Error("Grok hit its token limit while still reasoning — no final answer was produced. Retry.");
+    }
+    return choice?.message?.content ?? "";
   };
 
 /** Plan/critique call so Grok can also serve as the Feedback/Auditor model. */

@@ -334,13 +334,34 @@ export const deepseekLlm = (apiKey: string): LlmCall =>
       dangerouslyAllowBrowser: true,
     });
     // V4 thinking mode restricts sampling params — omit temperature.
+    // V4 Pro cannot disable reasoning (reasoning_effort is "high" | "max"
+    // only), and the token budget covers the chain of thought too — floor it
+    // at 16K so thinking can never starve the final answer.
     const response = await deepseek.chat.completions.create({
       model: DEEPSEEK_MODEL,
-      max_tokens: Math.min(maxTokens, 32000),
+      max_tokens: Math.min(Math.max(maxTokens, 16000), 32000),
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
       ],
     });
-    return response.choices[0]?.message?.content ?? "";
+
+    const choice: any = response.choices[0];
+    const content: string = choice?.message?.content ?? "";
+
+    if (!content.trim()) {
+      const thought = !!choice?.message?.reasoning_content;
+      if (choice?.finish_reason === "length") {
+        throw new Error(
+          "DeepSeek hit its token limit while still reasoning — no final answer was produced. Retry; persistent failures mean the input is too large."
+        );
+      }
+      throw new Error(
+        thought
+          ? "DeepSeek produced reasoning but no final answer. Retry."
+          : `DeepSeek returned empty content (finish_reason=${choice?.finish_reason ?? "unknown"}).`
+      );
+    }
+    // Defensive: some gateways inline the reasoning as <think> tags.
+    return content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
   };
