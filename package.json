@@ -7,11 +7,12 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node test/validate-core.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.41.0",
-    "docx": "^9.5.3",
+    "docx-preview": "^0.3.3",
     "file-saver": "^2.0.5",
     "jszip": "^3.10.1",
     "lucide-react": "^0.574.0",
@@ -22,6 +23,7 @@
     "react-markdown": "^10.1.0"
   },
   "devDependencies": {
+    "@types/file-saver": "^2.0.7",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "playwright-core": "^1.60.0",

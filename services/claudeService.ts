@@ -48,38 +48,65 @@ async function callClaude(
   const decoder = new TextDecoder();
   let fullText = "";
   let buffer = ""; // accumulates data across chunk boundaries
+  let truncated = false;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
+      buffer += decoder.decode(value, { stream: true });
 
-    // Only process complete lines — leave partial lines in buffer
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? ""; // last item may be incomplete, keep for next chunk
+      // Only process complete lines — leave partial lines in buffer
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? ""; // last item may be incomplete, keep for next chunk
 
-    for (const line of lines) {
-      const trimmed = line.trim();
+      for (const line of lines) {
+        const trimmed = line.trim();
 
-      // Skip blank lines and "event: ..." lines — only care about "data: ..."
-      if (!trimmed.startsWith("data:")) continue;
+        // Skip blank lines and "event: ..." lines — only care about "data: ..."
+        if (!trimmed.startsWith("data:")) continue;
 
-      const jsonStr = trimmed.slice(5).trim(); // strip "data:" prefix
-      if (!jsonStr || jsonStr === "[DONE]") continue;
+        const jsonStr = trimmed.slice(5).trim(); // strip "data:" prefix
+        if (!jsonStr || jsonStr === "[DONE]") continue;
 
-      try {
-        const parsed = JSON.parse(jsonStr);
+        let parsed: any;
+        try {
+          parsed = JSON.parse(jsonStr);
+        } catch {
+          continue; // unparseable chunk (ping noise) — never an event we act on
+        }
+
         if (
           parsed.type === "content_block_delta" &&
           parsed.delta?.type === "text_delta"
         ) {
           fullText += parsed.delta.text ?? "";
+        } else if (parsed.type === "error") {
+          // Mid-stream failure (overloaded etc.): without this the stream just
+          // ends and the truncated text surfaces later as a bogus JSON-parse
+          // error far from the real cause.
+          const err: any = new Error(
+            `Claude stream error: ${parsed.error?.message ?? parsed.error?.type ?? "unknown"}`
+          );
+          if (parsed.error?.type === "overloaded_error") err.status = 529;
+          throw err;
+        } else if (
+          parsed.type === "message_delta" &&
+          parsed.delta?.stop_reason === "max_tokens"
+        ) {
+          truncated = true;
         }
-      } catch {
-        // silently skip unparseable chunks (ping events, etc.)
       }
     }
+  } finally {
+    try { await reader.cancel(); } catch { /* already closed */ }
+  }
+
+  if (truncated) {
+    throw new Error(
+      `Claude hit the ${maxTokens}-token output limit — the response is incomplete and cannot be parsed. Retry, or reduce the input size.`
+    );
   }
 
   return fullText;

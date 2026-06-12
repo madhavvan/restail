@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+
+# personal test ground truth — never commit a real resume's data
+test/local-fixture.json
 
 # Editor directories and files
 .vscode/*

@@ -1,55 +1,21 @@
 import { Modification, ParagraphInfo } from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CDN Library Loaders
+// Bundled libraries — imported from npm and shipped in the bundle, so parsing,
+// applying, and saving never depend on a CDN being reachable, and the versions
+// running are exactly the ones pinned in package.json (the old CDN loader
+// served mammoth 1.6.0 while package.json declared ^1.11.0).
 // ─────────────────────────────────────────────────────────────────────────────
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
+import mammothBrowser from 'mammoth/mammoth.browser.js';
 
-const CDN = {
-  mammoth:   'https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js',
-  jszip:     'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
-  fileSaver: 'https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js',
-};
-
-const _loaded: Record<string, Promise<void>> = {};
-const loadScript = (url: string): Promise<void> => {
-  if (_loaded[url]) return _loaded[url];
-  _loaded[url] = new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${url}"]`)) { resolve(); return; }
-    const s = document.createElement('script');
-    s.src = url; s.async = true;
-    s.onload  = () => resolve();
-    s.onerror = () => reject(new Error(`Failed to load CDN script: ${url}`));
-    document.head.appendChild(s);
-  });
-  return _loaded[url];
-};
-
-const getMammoth = async (): Promise<typeof import('mammoth')> => {
-  await loadScript(CDN.mammoth);
-  const lib = (window as any).mammoth;
-  if (!lib) throw new Error('mammoth did not attach to window after CDN load.');
-  return lib;
-};
-
-const getJSZip = async (): Promise<typeof import('jszip')> => {
-  await loadScript(CDN.jszip);
-  const lib = (window as any).JSZip;
-  if (!lib) throw new Error('JSZip did not attach to window after CDN load.');
-  return lib as any;
-};
-
-const getSaveAs = async (): Promise<(blob: Blob, name: string) => void> => {
-  await loadScript(CDN.fileSaver);
-  const fn = (window as any).saveAs;
-  if (typeof fn !== 'function') throw new Error('saveAs did not attach to window after CDN load.');
-  return fn;
-};
+const mammoth = mammothBrowser as unknown as typeof import('mammoth');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public: Extract plain text from a .docx file
 // ─────────────────────────────────────────────────────────────────────────────
 export const extractTextFromDocx = async (file: File): Promise<string> => {
-  const mammoth     = await getMammoth();
   const arrayBuffer = await file.arrayBuffer();
   const result      = await mammoth.extractRawText({ arrayBuffer });
   return result.value;
@@ -59,7 +25,6 @@ export const extractTextFromDocx = async (file: File): Promise<string> => {
 // Public: Extract HTML from a .docx file
 // ─────────────────────────────────────────────────────────────────────────────
 export const extractHtmlFromDocx = async (file: File): Promise<string> => {
-  const mammoth     = await getMammoth();
   const arrayBuffer = await file.arrayBuffer();
   const result      = await mammoth.convertToHtml({ arrayBuffer });
   return result.value;
@@ -239,12 +204,21 @@ const isContactLine = (paragraph: Element): boolean => {
   // The title part IS modifiable — applyReplacement() preserves the contact section.
   if (hasBreak) return false;
 
-  // No break — standalone paragraph containing hyperlinks: protect only when
-  // it is short (a link row) or carries explicit contact markers. A long
-  // skills/bullet line that happens to include an auto-linked word stays editable.
-  if (paragraph.getElementsByTagNameNS(W_NS, 'hyperlink').length > 0) {
+  // No break — standalone paragraph containing hyperlinks. Protect it only
+  // when it IS a link row (most of its text is anchor text — "GitHub |
+  // LinkedIn | Portfolio") or carries explicit contact markers. A prose
+  // bullet that merely CONTAINS an inline link ("… — see GitHub for code")
+  // is content and stays editable; applyReplacement re-links anchors whose
+  // text survives the rewrite.
+  const links = Array.from(paragraph.getElementsByTagNameNS(W_NS, 'hyperlink'));
+  if (links.length > 0) {
     const t = (paragraph.textContent || '').replace(/\s+/g, ' ').trim();
-    if (t.length <= 110 || /@|linkedin\.com|github\.com|\d{3}[-.\s]\d{3,}/i.test(t)) return true;
+    if (/@|linkedin\.com|github\.com|\d{3}[-.\s]\d{3,}/i.test(t)) return true;
+    const linkLen = links.reduce(
+      (n, h) => n + (h.textContent || '').replace(/\s+/g, ' ').trim().length, 0
+    );
+    if (t.length > 0 && linkLen / t.length >= 0.6) return true; // a link row
+    if (t.length <= 40) return true; // ultra-short link stub ("GitHub")
   }
 
   return false;
@@ -418,6 +392,83 @@ const getParagraphText = (
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// relinkSurvivingAnchors
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Re-link hyperlinks whose anchor text survived a rewrite.
+ *
+ * When a paragraph with an inline hyperlink ("built a search service — see GitHub") is
+ * rewritten, the <w:hyperlink> element is removed along with the old runs and
+ * the new text is written as plain runs. The anchor TEXT was part of what the
+ * model read, and it usually re-emits it verbatim ("GitHub"); when it does,
+ * wrap that exact segment in a clone of the original hyperlink so the r:id
+ * relationship (still present in document.xml.rels) keeps working. Anchors
+ * whose text was dropped by the rewrite stay plain — there is nothing left to
+ * attach them to. Only single-run matches are wrapped; an anchor split across
+ * runs (a bold boundary inside the anchor) is left plain rather than risking
+ * text reordering.
+ */
+const relinkSurvivingAnchors = (
+  paragraph: Element,
+  xmlDoc: Document,
+  originalHyperlinks: Element[]
+): void => {
+  for (const link of originalHyperlinks) {
+    const anchorText = (link.textContent || '').replace(/\s+/g, ' ').trim();
+    if (anchorText.length < 2) continue;
+
+    const runs = Array.from(paragraph.childNodes).filter(
+      n => (n as Element).localName === 'r'
+    ) as Element[];
+
+    for (const run of runs) {
+      const tEl = run.getElementsByTagNameNS(W_NS, 't')[0];
+      const tText = tEl?.textContent || '';
+      let at = tText.indexOf(anchorText);
+      if (at === -1) at = tText.toLowerCase().indexOf(anchorText.toLowerCase());
+      if (at === -1) continue;
+
+      const before  = tText.substring(0, at);
+      const matched = tText.substring(at, at + anchorText.length);
+      const after   = tText.substring(at + anchorText.length);
+
+      // Clone the hyperlink shell (attributes only — keeps r:id) and give it
+      // one run carrying the original anchor's formatting (link color/underline).
+      const newLink = link.cloneNode(false) as Element;
+      const anchorRun = xmlDoc.createElementNS(W_NS, 'r');
+      const origAnchorRPr = link.getElementsByTagNameNS(W_NS, 'rPr')[0];
+      if (origAnchorRPr) anchorRun.appendChild(origAnchorRPr.cloneNode(true));
+      const anchorT = xmlDoc.createElementNS(W_NS, 't');
+      anchorT.textContent = matched;
+      anchorT.setAttributeNS(XML_NS, 'xml:space', 'preserve');
+      anchorRun.appendChild(anchorT);
+      newLink.appendChild(anchorRun);
+
+      const runRPr = run.getElementsByTagNameNS(W_NS, 'rPr')[0];
+      const mkRun = (txt: string): Element | null => {
+        if (!txt) return null;
+        const r = xmlDoc.createElementNS(W_NS, 'r');
+        if (runRPr) r.appendChild(runRPr.cloneNode(true));
+        const t = xmlDoc.createElementNS(W_NS, 't');
+        t.textContent = txt;
+        t.setAttributeNS(XML_NS, 'xml:space', 'preserve');
+        r.appendChild(t);
+        return r;
+      };
+
+      const beforeRun = mkRun(before);
+      const afterRun  = mkRun(after);
+      if (beforeRun) paragraph.insertBefore(beforeRun, run);
+      paragraph.insertBefore(newLink, run);
+      if (afterRun) paragraph.insertBefore(afterRun, run);
+      paragraph.removeChild(run);
+      break; // this anchor is placed — move to the next hyperlink
+    }
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // applyReplacement
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -500,6 +551,10 @@ const applyReplacement = (
     // No break — entire paragraph is one section
     titleChildren = allContentChildren;
   }
+
+  // Inline hyperlinks in the editable section: remembered so anchors whose
+  // text survives the rewrite can be re-linked after the new runs are written.
+  const editableHyperlinks = titleChildren.filter(c => c.localName === 'hyperlink');
 
   // ── Capture base formatting from the first title run ─────────────────────
   // KEY FIX: The break run often contains BOTH the title text AND <w:br/> in
@@ -621,6 +676,11 @@ const applyReplacement = (
     }
   } else {
     writeFinalText(finalText, originalIsBold);
+  }
+
+  // ── Re-link editable-section hyperlinks whose anchor text survived ───────
+  if (editableHyperlinks.length > 0) {
+    relinkSurvivingAnchors(paragraph, xmlDoc, editableHyperlinks);
   }
 
   // ── Re-attach the contact section (break + hyperlinks + runs) ────────────
@@ -901,8 +961,7 @@ export const applyModificationsToBuffer = async (
 ): Promise<ArrayBuffer> => {
   if (!modifications?.length) return originalBuffer;
 
-  const JSZip = await getJSZip();
-  const zip   = await (JSZip as any).loadAsync(originalBuffer);
+  const zip = await JSZip.loadAsync(originalBuffer);
 
   const docFile = zip.file('word/document.xml');
   if (!docFile) throw new Error('word/document.xml not found in this .docx archive.');
@@ -928,11 +987,8 @@ export const modifyAndDownloadDocx = async (
   isFinalRound = true
 ): Promise<void> => {
   try {
-    const JSZip  = await getJSZip();
-    const saveAs = await getSaveAs();
-
     const arrayBuffer = await originalFile.arrayBuffer();
-    const zip         = await (JSZip as any).loadAsync(arrayBuffer);
+    const zip         = await JSZip.loadAsync(arrayBuffer);
 
     const docFile = zip.file('word/document.xml');
     if (!docFile) throw new Error('word/document.xml not found in this .docx archive.');
@@ -1019,8 +1075,7 @@ const ownText = (paragraph: Element): string =>
 const loadDocumentXml = async (
   buffer: ArrayBuffer
 ): Promise<{ zip: any; xmlDoc: Document }> => {
-  const JSZip = await getJSZip();
-  const zip = await (JSZip as any).loadAsync(buffer);
+  const zip = await JSZip.loadAsync(buffer);
   const docFile = zip.file('word/document.xml');
   if (!docFile) throw new Error('word/document.xml not found in this .docx archive.');
   const xmlDoc = new DOMParser().parseFromString(await docFile.async('string'), 'text/xml');
@@ -1042,13 +1097,36 @@ export const visibleTextOf = (s: string): string =>
  *     preserved automatically by applyReplacement().
  */
 /** Candidate-name heuristic: short, letters-only line near the top
- *  ("VENU MADHAV PENTALA", "John Smith") — never offered for editing. */
+ *  ("JANE A. DOE", "John Smith") — never offered for editing. */
 const looksLikeName = (text: string): boolean =>
   text.length > 0 &&
   text.length <= 48 &&
   !/[\d@|,:;/\\]/.test(text) &&
   /^[\p{L}.\-'\s]+$/u.test(text) &&
   text.trim().split(/\s+/).length >= 2;
+
+/**
+ * Job-title guard for the name lock: a plain-words headline ("Senior Software
+ * Engineer", "Data Engineer") passes looksLikeName and used to get locked as
+ * the candidate's name — which silently made the pipeline's #1 playbook rule
+ * (headline must carry the JD's exact title) impossible. A line containing
+ * profession vocabulary is a headline, not a name; names containing these
+ * words are vanishingly rare, and the writing contract independently forbids
+ * editing names, so the residual risk of unlocking one is negligible.
+ */
+const TITLE_WORD_RE = new RegExp(
+  '\\b(' + [
+    'engineer(?:ing)?', 'developer', 'programmer', 'architect', 'scientist',
+    'analyst', 'consultant', 'administrator', 'specialist', 'manager',
+    'director', 'lead', 'intern', 'designer', 'researcher', 'software',
+    'data', 'cloud', 'platform', 'security', 'devops', 'sre', 'frontend',
+    'backend', 'fullstack', 'full[ -]stack', 'front[ -]end', 'back[ -]end',
+    'machine[ -]learning', 'site[ -]reliability', 'product', 'technical',
+    'solutions?', 'systems?', 'network', 'database', 'infrastructure', 'qa',
+  ].join('|') + ')\\b',
+  'i'
+);
+const looksLikeTitle = (text: string): boolean => TITLE_WORD_RE.test(text);
 
 export const extractParagraphTable = async (
   buffer: ArrayBuffer
@@ -1057,6 +1135,7 @@ export const extractParagraphTable = async (
   const paras = getAllParagraphElements(xmlDoc);
 
   let nonEmptySeen = 0;
+  let nameLocked = false;
   return paras.map((p, id) => {
     const fullText = ownText(p).replace(/\s+/g, ' ').trim();
     const { text: beforeContact } = getParagraphText(p);
@@ -1071,8 +1150,11 @@ export const extractParagraphTable = async (
       // Name lock: only the first two non-empty paragraphs are candidates —
       // the candidate's name is virtually always there; anything later that
       // merely looks name-ish (e.g. an ALL-CAPS section header) stays editable.
-      if (nonEmptySeen <= 2 && looksLikeName(fullText)) {
-        locked = true; lockReason = 'name';
+      // Two guards keep headlines editable: a document has exactly ONE name
+      // (lock at most once), and profession vocabulary disqualifies a line —
+      // "Senior Software Engineer" under the name is a headline, not a name.
+      if (nonEmptySeen <= 2 && !nameLocked && looksLikeName(fullText) && !looksLikeTitle(fullText)) {
+        locked = true; lockReason = 'name'; nameLocked = true;
       } else if (isContactLine(p)) {
         locked = true; lockReason = 'contact';
       }
@@ -1148,11 +1230,28 @@ export const applyModificationsByIdToBuffer = async (
   return { buffer, applied, warnings };
 };
 
+/**
+ * The pipeline's no-op transform: trailing-empty cleanup + label auto-bolding,
+ * exactly what applyModificationsByIdToBuffer runs AFTER applying mods — with
+ * zero mods. Measuring the layout baseline on THIS buffer (instead of the raw
+ * upload) means baseline and post-modification measurements differ only by
+ * the mods themselves. Bolding widens text, so a near-full line can wrap one
+ * line further with zero content change — that belongs in the baseline, not
+ * in an overflow finding the repair loop chases by reverting innocent mods.
+ */
+export const normalizeDocxBuffer = async (buffer: ArrayBuffer): Promise<ArrayBuffer> => {
+  const { zip, xmlDoc } = await loadDocumentXml(buffer);
+  removeTrailingEmptyParagraphs(xmlDoc);
+  applyAutoFormatting(xmlDoc);
+  zip.file('word/document.xml', new XMLSerializer().serializeToString(xmlDoc));
+  const blob: Blob = await zip.generateAsync({ type: 'blob' });
+  return blob.arrayBuffer();
+};
+
 /** Save an already-final buffer (the exact verified bytes) as a .docx download. */
 export const saveBufferAsDocx = async (
   buffer: ArrayBuffer,
   fileName = 'Tailored_Resume.docx'
 ): Promise<void> => {
-  const saveAs = await getSaveAs();
   saveAs(new Blob([buffer], { type: DOCX_MIME }), fileName);
 };

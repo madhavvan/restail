@@ -11,7 +11,9 @@ export const createOptimizationPlanGemini = async (
   jobDescription: string,
   apiKey: string
 ): Promise<string> => {
-  const key = apiKey || process.env.GEMINI_API_KEY;
+  // Keys come exclusively from the Settings UI — never from build-time env,
+  // which would bake the key into a publicly served bundle.
+  const key = apiKey;
   if (!key) throw new Error("Gemini API Key missing.");
 
   const ai = new GoogleGenAI({ apiKey: key });
@@ -52,7 +54,7 @@ export const tailorResumeGemini = async (
     currentScore: number
   }
 ): Promise<TailoredResumeData> => {
-  const key = apiKey || process.env.GEMINI_API_KEY;
+  const key = apiKey;
   if (!key) throw new Error("Gemini API Key missing.");
 
   const ai = new GoogleGenAI({ apiKey: key });
@@ -441,7 +443,7 @@ Return updated JSON now.`;
 // ─────────────────────────────────────────────────────────────────────────────
 export const geminiLlm = (apiKey: string): LlmCall =>
   async (system, user, _temperature, maxTokens) => {
-    const key = apiKey || (process.env.GEMINI_API_KEY as string);
+    const key = apiKey;
     if (!key) throw new Error("Gemini API Key missing.");
     const ai = new GoogleGenAI({ apiKey: key });
     // Thinking-class models reject non-default sampling params — omit

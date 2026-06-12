@@ -1,5 +1,5 @@
 {
   "name": "ResuTailor AI",
-  "description": "Intelligent resume tailoring application that adapts your resume to specific job descriptions using Gemini 2.5 Flash.",
+  "description": "Client-side resume tailoring studio: paragraph-ID precision editing of .docx files, render-verified layout, deterministic ATS keyword scoring, and five switchable LLM providers with bring-your-own API keys.",
   "requestFramePermissions": []
 }

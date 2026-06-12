@@ -13,38 +13,17 @@
 // what we verify is what the user sees.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DOCX_PREVIEW_CSS_URL =
-  'https://cdn.jsdelivr.net/npm/docx-preview@0.3.3/dist/docx-preview.min.css';
+// Bundled from npm (no esm.sh at runtime). docx-preview injects all the CSS
+// it needs into the style container during renderAsync — the separate
+// stylesheet the old CDN <link> pointed at doesn't exist in the package.
+import { renderAsync } from 'docx-preview';
+
 const DOCX_MIME =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-let _docxPreviewPromise: Promise<{ renderAsync: Function }> | null = null;
-
-export const loadDocxPreview = (): Promise<{ renderAsync: Function }> => {
-  if (_docxPreviewPromise) return _docxPreviewPromise;
-
-  if (!document.querySelector(`link[href="${DOCX_PREVIEW_CSS_URL}"]`)) {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = DOCX_PREVIEW_CSS_URL;
-    document.head.appendChild(link);
-  }
-
-  // @ts-ignore — runtime ESM URL import (no local type declarations)
-  _docxPreviewPromise = (import(/* @vite-ignore */ 'https://esm.sh/docx-preview@0.3.3') as Promise<any>)
-    .then(mod => {
-      const renderAsync = mod.renderAsync ?? mod.default?.renderAsync;
-      if (typeof renderAsync !== 'function')
-        throw new Error('docx-preview: renderAsync not found in ES module exports');
-      return { renderAsync: renderAsync.bind(mod.default ?? mod) };
-    })
-    .catch(err => {
-      _docxPreviewPromise = null;
-      throw err;
-    });
-
-  return _docxPreviewPromise;
-};
+/** Kept async for API compatibility with the previous dynamic CDN loader. */
+export const loadDocxPreview = async (): Promise<{ renderAsync: typeof renderAsync }> =>
+  ({ renderAsync });
 
 const RENDER_OPTIONS = {
   className: 'docx',
@@ -203,16 +182,6 @@ export const preparePrintFrame = async (
 
     // Browsers default the Save-as-PDF filename to the document title.
     idoc.title = suggestedName;
-
-    // docx-preview stylesheet inside the frame
-    await new Promise<void>((resolve) => {
-      const link = idoc.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = DOCX_PREVIEW_CSS_URL;
-      link.onload = () => resolve();
-      link.onerror = () => resolve(); // render still works with injected styles
-      idoc.head.appendChild(link);
-    });
 
     const mount = idoc.createElement('div');
     idoc.body.appendChild(mount);

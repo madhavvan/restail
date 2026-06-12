@@ -1,0 +1,43 @@
+{
+  "_comment": "Copy to test/local-fixture.json (gitignored) and fill in YOUR resume's Word ground truth: open the .docx in Microsoft Word and record what it actually shows. Every value below is an example.",
+  "docx": "/absolute/path/to/your-resume.docx",
+  "expect": {
+    "paraCount": 60,
+    "nameId": 0,
+    "headlineId": 1,
+    "headlinePrefix": "Software Engineer",
+    "editableIds": [1, 3, 14],
+    "pages": 2,
+    "contentHeightPx": { "min": 1500, "max": 3200 },
+    "pageSizeIn": { "w": 8.27, "h": 11.69, "tol": 0.25 },
+    "summary": {
+      "id": 4,
+      "minChars": 400,
+      "maxChars": 900,
+      "domPrefix": "first words of your summary paragraph, lowercase",
+      "renderedLines": 7,
+      "linesTolerance": 1
+    },
+    "titleSwap": {
+      "id": 1,
+      "newTitle": "Site Reliability Engineer – Cloud Automation",
+      "mustContain": ["your.email@example.com", "555-123-4567"],
+      "mustNotContain": "Your Original Headline"
+    },
+    "idSwap": {
+      "mods": [
+        {
+          "paragraph_id": 20,
+          "new_content": "Built **Python** and **SQL** automations processing 50K+ records daily, cutting latency 30%.",
+          "expectPrefix": "Built Python and SQL automations"
+        },
+        {
+          "paragraph_id": 21,
+          "new_content": "Tuned database workloads, resolving recurring slow queries and lifting performance 25%.",
+          "expectPrefix": "Tuned database workloads"
+        }
+      ],
+      "neighbor": { "id": 22, "expectPrefix": "First words of the untouched neighbor bullet" }
+    }
+  }
+}

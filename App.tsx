@@ -15,8 +15,9 @@ import {
 import {
   applyModificationsToBuffer, extractParagraphTable,
   applyModificationsByIdToBuffer, visibleTextOf,
+  normalizeDocxBuffer, extractTextFromDocx,
 } from './services/documentService';
-import { measureDocxBuffer, preparePrintFrame } from './services/docxRender';
+import { measureDocxBuffer, preparePrintFrame, loadDocxPreview } from './services/docxRender';
 import { scoreTextAgainstKeywords, composeModifiedText } from './services/atsScore';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -25,37 +26,6 @@ import {
   Shield, Zap, Eye, ChevronRight, Home, Shuffle, ArrowLeft,
   CheckCircle2, Star, Target, Cpu,
 } from 'lucide-react';
-
-// ─── docx-preview — loaded as a proper ES module via esm.sh ─────────────────
-const DOCX_PREVIEW_CSS_URL = 'https://cdn.jsdelivr.net/npm/docx-preview@0.3.3/dist/docx-preview.min.css';
-
-let _docxPreviewPromise: Promise<{ renderAsync: Function }> | null = null;
-
-const loadDocxPreview = (): Promise<{ renderAsync: Function }> => {
-  if (_docxPreviewPromise) return _docxPreviewPromise;
-
-  if (!document.querySelector(`link[href="${DOCX_PREVIEW_CSS_URL}"]`)) {
-    const link = document.createElement('link');
-    link.rel  = 'stylesheet';
-    link.href = DOCX_PREVIEW_CSS_URL;
-    document.head.appendChild(link);
-  }
-
-  // @ts-ignore — runtime ESM URL import (no local type declarations)
-  _docxPreviewPromise = (import('https://esm.sh/docx-preview@0.3.3') as Promise<any>)
-    .then(mod => {
-      const renderAsync = mod.renderAsync ?? mod.default?.renderAsync;
-      if (typeof renderAsync !== 'function')
-        throw new Error('docx-preview: renderAsync not found in ES module exports');
-      return { renderAsync: renderAsync.bind(mod.default ?? mod) };
-    })
-    .catch(err => {
-      _docxPreviewPromise = null;
-      throw err;
-    });
-
-  return _docxPreviewPromise;
-};
 
 // ─── Global CSS ───────────────────────────────────────────────────────────────
 const GLOBAL_CSS = `
@@ -374,6 +344,8 @@ const App: React.FC = () => {
         scoreTextAgainstKeywords,
         visibleTextOf,
         preparePrintFrame,
+        normalizeDocxBuffer,
+        extractTextFromDocx,
       };
     }
   }, []);
@@ -662,7 +634,8 @@ const App: React.FC = () => {
         return await op();
       } catch (err: any) {
         attempts++;
-        const isRate = err?.status === 429 || /quota|rate.?limit|too.?many|exceeded/i.test(err?.message ?? '');
+        const isRate = err?.status === 429 || err?.status === 529 ||
+          /quota|rate.?limit|too.?many|exceeded|overloaded/i.test(err?.message ?? '');
         if (isRate && attempts <= 2) {
           addLog('SYSTEM', `⚠️ Rate limit (${name}). Retrying in ${attempts * 3}s…`);
           await new Promise(r => setTimeout(r, attempts * 3000));
@@ -760,7 +733,10 @@ const App: React.FC = () => {
     // ── 1 · Geometry: paragraph table + real rendered layout ────────────────
     setThinking({ agent: primaryName, action: 'Parsing document geometry…' });
     const paragraphs = await extractParagraphTable(originalFileBuffer.slice(0));
-    const baseline = await measureDocxBuffer(originalFileBuffer.slice(0));
+    // Baseline geometry comes from the NORMALIZED buffer — the same trailing-
+    // empty cleanup + label-bolding pass every applied buffer goes through —
+    // so auto-formatting can never register as overflow caused by the mods.
+    const baseline = await measureDocxBuffer(await normalizeDocxBuffer(originalFileBuffer.slice(0)));
     setThinking(null);
 
     // Align rendered <p> elements to XML paragraph IDs by text (two-pointer,
