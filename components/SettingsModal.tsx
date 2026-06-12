@@ -15,7 +15,7 @@ interface SettingsModalProps {
 const PROVIDERS = [
   { key: 'openai',   label: 'OpenAI (GPT-5.5)',       color: 'emerald', fieldKey: 'openaiApiKey'   },
   { key: 'deepseek', label: 'DeepSeek (V4 Pro)',       color: 'blue',    fieldKey: 'deepseekApiKey' },
-  { key: 'gemini',   label: 'Google Gemini (3.1 Pro)',  color: 'violet',  fieldKey: 'geminiApiKey'   },
+  { key: 'gemini',   label: 'Google Gemini (3.5 Flash)', color: 'violet',  fieldKey: 'geminiApiKey'   },
   { key: 'claude',   label: 'Anthropic (Sonnet 4.6)',     color: 'amber',   fieldKey: 'claudeApiKey'   },
   { key: 'grok',     label: 'xAI (Grok 4.3)',            color: 'orange',  fieldKey: 'grokApiKey'     },
 ] as const;

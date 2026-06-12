@@ -2,9 +2,48 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { TailoredResumeData } from "../types";
 import type { LlmCall } from "./precisionService";
 
-// Stable GA id — the -preview suffix was retired at GA (ai.google.dev
-// changelog, verified 2026-06-10)
-const GEMINI_MODEL = "gemini-3.1-pro";
+// Verified against ai.google.dev/gemini-api/docs/models on 2026-06-12:
+// gemini-3.5-flash is the current STABLE flagship ("most intelligent model
+// for sustained frontier performance"); 3.1 Pro exists only as "-preview"
+// there — the bare "gemini-3.1-pro" 404s (NOT_FOUND), which paused a live run.
+const GEMINI_MODEL = "gemini-3.5-flash";
+
+// ── Self-healing model resolution ────────────────────────────────────────────
+// Google renames/retires ids (it just happened). If the pinned id 404s,
+// list the key's available models once, pick the best Gemini text model
+// (Pro over Flash, newest version, stable over preview), and use it for the
+// rest of the session instead of pausing the run.
+let _resolvedGeminiModel: string | null = null;
+
+const isModelNotFound = (err: any): boolean =>
+  err?.status === 404 || /NOT_FOUND|is not found/i.test(String(err?.message ?? err ?? ""));
+
+const resolveGeminiModel = async (ai: GoogleGenAI): Promise<string> => {
+  if (_resolvedGeminiModel) return _resolvedGeminiModel;
+  const ids: string[] = [];
+  const pager: any = await ai.models.list();
+  for await (const m of pager) {
+    const name = String(m?.name ?? "").replace(/^models\//, "");
+    const actions: string[] =
+      (m as any)?.supportedActions ?? (m as any)?.supportedGenerationMethods ?? [];
+    if (name.startsWith("gemini-") && (actions.length === 0 || actions.includes("generateContent"))) {
+      ids.push(name);
+    }
+  }
+  // Newest generation first (Google's flagship is currently a Flash), then
+  // Pro over Flash within a generation, then stable over preview/exp.
+  const rank = (id: string) => {
+    const ver = parseFloat(/gemini-(\d+(?:\.\d+)?)/.exec(id)?.[1] ?? "0");
+    const tier = id.includes("pro") ? 2 : id.includes("flash") ? 1 : 0;
+    const stable = /preview|exp/.test(id) ? 0 : 0.5;
+    return ver * 100 + tier * 10 + stable;
+  };
+  const best = ids.sort((a, b) => rank(b) - rank(a))[0];
+  if (!best) throw new Error("Gemini: this API key has no generateContent-capable models available.");
+  console.warn(`[gemini] pinned model "${GEMINI_MODEL}" unavailable — using "${best}" for this session.`);
+  _resolvedGeminiModel = best;
+  return best;
+};
 
 export const createOptimizationPlanGemini = async (
   resumeText: string,
@@ -446,21 +485,32 @@ export const geminiLlm = (apiKey: string): LlmCall =>
     const key = apiKey;
     if (!key) throw new Error("Gemini API Key missing.");
     const ai = new GoogleGenAI({ apiKey: key });
+
     // Thinking-class models reject non-default sampling params — omit
     // temperature; pipeline determinism is enforced by code-side validation.
     // Thinking shares maxOutputTokens — floor it so reasoning can't starve
     // the final answer.
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: user,
-      config: {
-        systemInstruction: system,
-        maxOutputTokens: Math.max(maxTokens, 16000),
-      },
-    });
-    const text = response.text || "";
-    if (!text.trim() && response.candidates?.[0]?.finishReason === "MAX_TOKENS") {
-      throw new Error("Gemini hit its token limit while still thinking — no final answer was produced. Retry.");
+    const callOnce = async (model: string): Promise<string> => {
+      const response = await ai.models.generateContent({
+        model,
+        contents: user,
+        config: {
+          systemInstruction: system,
+          maxOutputTokens: Math.max(maxTokens, 16000),
+        },
+      });
+      const text = response.text || "";
+      if (!text.trim() && response.candidates?.[0]?.finishReason === "MAX_TOKENS") {
+        throw new Error("Gemini hit its token limit while still thinking — no final answer was produced. Retry.");
+      }
+      return text;
+    };
+
+    try {
+      return await callOnce(_resolvedGeminiModel ?? GEMINI_MODEL);
+    } catch (err) {
+      // Only a pinned-id NOT_FOUND triggers resolution, and only once.
+      if (_resolvedGeminiModel || !isModelNotFound(err)) throw err;
+      return await callOnce(await resolveGeminiModel(ai));
     }
-    return text;
   };

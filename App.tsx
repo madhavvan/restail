@@ -267,7 +267,7 @@ const providerLabel = (p: string) =>
   : p === 'deepseek' ? 'DeepSeek V4 Pro'
   : p === 'claude'   ? 'Claude Sonnet 4.6'
   : p === 'grok'     ? 'Grok 4.3'
-  : 'Gemini 3.1 Pro';
+  : 'Gemini 3.5 Flash';
 
 const apiKeyField = (p: string) =>
   p === 'claude'   ? 'claudeApiKey'
