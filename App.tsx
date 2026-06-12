@@ -11,6 +11,7 @@ import { tailorResumeClaude, createOptimizationPlanClaude, claudeLlm } from './s
 import { grokLlm, createOptimizationPlanGrok } from './services/grokservices';
 import {
   extractJdKeywords, tailorResumePrecision, EngineFindings, LlmCall,
+  draftOptimizationPlan, critiqueOptimizationPlan,
 } from './services/precisionService';
 import {
   applyModificationsToBuffer, extractParagraphTable,
@@ -386,8 +387,10 @@ const App: React.FC = () => {
     setAgentLogs(prev => [...prev, { id: Math.random().toString(36).slice(2), agent, message, ts: new Date() }]);
   }, []);
 
+  // Capped at 3.5s: pacing for readability, never artificial dead air — a
+  // 4K-char plan used to stall the pipeline 10+ seconds per message.
   const awaitTyping = (text: string) =>
-    new Promise<void>(r => setTimeout(r, Math.ceil((text.length / 4) * 10) + 400));
+    new Promise<void>(r => setTimeout(r, Math.min(Math.ceil((text.length / 4) * 10) + 400, 3500)));
 
   const handleSaveSettings = (s: AppSettings) => {
     setSettings(s);
@@ -725,10 +728,18 @@ const App: React.FC = () => {
     const wllm: LlmCall = (s, u, t, m) => writerFor(settingsRef.current.activeProvider).llm(s, u, t, m);
 
     const primaryName = writerFor(settingsRef.current.activeProvider).name;
-    const fbProvider = settingsRef.current.feedbackProvider || 'deepseek';
+    // Reviewer seat: falls back to the writer's provider when the configured
+    // feedback model has no key — a single-key setup still gets a critique
+    // (self-review) instead of a hard block at the review step.
+    const fbConfigured = settingsRef.current.feedbackProvider || 'deepseek';
+    const fbProvider = getApiKey(fbConfigured) ? fbConfigured : settingsRef.current.activeProvider;
     const reviewerName = providerLabel(fbProvider);
+    const rllm: LlmCall = (s, u, t, m) => writerFor(fbProvider).llm(s, u, t, m);
 
     addLog('SYSTEM', `Precision pipeline engaged. ${primaryName} ⇆ ${reviewerName} connected.`);
+    if (fbProvider !== fbConfigured) {
+      addLog('SYSTEM', `No API key for ${providerLabel(fbConfigured)} — ${reviewerName} will critique its own plan this run.`);
+    }
 
     // ── 1 · Geometry: paragraph table + real rendered layout ────────────────
     setThinking({ agent: primaryName, action: 'Parsing document geometry…' });
@@ -812,15 +823,10 @@ const App: React.FC = () => {
     if (cancelRef.current) return;
 
     setThinking({ agent: primaryName, action: 'Building optimization plan…' });
-    const writerPlan = () => {
-      const p = settingsRef.current.activeProvider;
-      if (p === 'openai')   return createOptimizationPlan(resumeText, jobDescription, getApiKey('openai'));
-      if (p === 'deepseek') return createOptimizationPlanDeepSeek(resumeText, jobDescription, getApiKey('deepseek'), reviewerName);
-      if (p === 'gemini')   return createOptimizationPlanGemini(resumeText, jobDescription, getApiKey('gemini'));
-      if (p === 'grok')     return createOptimizationPlanGrok(resumeText, jobDescription, getApiKey('grok'), reviewerName);
-      return createOptimizationPlanClaude(resumeText, jobDescription, getApiKey('claude'));
-    };
-    const plan = await withRetry(writerPlan, primaryName);
+    const plan = await withRetry(
+      () => draftOptimizationPlan(wllm, resumeText, jobDescription, primaryName, reviewerName),
+      primaryName
+    );
     setThinking(null);
     if (cancelRef.current) return;
 
@@ -829,16 +835,13 @@ const App: React.FC = () => {
     await awaitTyping(planMsg);
     if (cancelRef.current) return;
 
-    setThinking({ agent: reviewerName, action: 'Reviewing plan and cooking feedback…' });
-    const reviewerPlan = () => {
-      const fb = settingsRef.current.feedbackProvider || 'deepseek';
-      if (fb === 'deepseek') return createOptimizationPlanDeepSeek(resumeText, jobDescription, getApiKey('deepseek'), primaryName);
-      if (fb === 'openai')   return createOptimizationPlan(resumeText, jobDescription, getApiKey('openai'));
-      if (fb === 'claude')   return createOptimizationPlanClaude(resumeText, jobDescription, getApiKey('claude'));
-      if (fb === 'grok')     return createOptimizationPlanGrok(resumeText, jobDescription, getApiKey('grok'), primaryName);
-      return createOptimizationPlanGemini(resumeText, jobDescription, getApiKey('gemini'));
-    };
-    const reviewFeedback = await withRetry(reviewerPlan, reviewerName);
+    // The reviewer receives the writer's plan VERBATIM — the critique is of
+    // the real plan, not an imagined one.
+    setThinking({ agent: reviewerName, action: 'Reviewing the plan against resume + JD…' });
+    const reviewFeedback = await withRetry(
+      () => critiqueOptimizationPlan(rllm, plan, resumeText, jobDescription, reviewerName, primaryName),
+      reviewerName
+    );
     setThinking(null);
     if (cancelRef.current) return;
 
@@ -941,7 +944,12 @@ const App: React.FC = () => {
     const v1 = await withRetry(
       () => tailorResumePrecision(wllm, paragraphs, jobDescription, keywords, {
         round: 'write',
-        strategistNotes: reviewFeedback,
+        // Each call is a fresh context — the writer does not remember
+        // drafting the plan. Feed BOTH the plan and the critique, so the
+        // exchange the user watched is exactly what conditions the write.
+        strategistNotes:
+          `AGREED PLAN (you drafted this):\n${plan}\n\n` +
+          `CRITICAL REVIEW (${reviewerName}) — address every point:\n${reviewFeedback}`,
       }),
       primaryName
     );

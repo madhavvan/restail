@@ -80,6 +80,70 @@ Rules:
     }));
 };
 
+// ─── Strategy round — the dual-agent exchange, wired for real ────────────────
+// The writer drafts a plan; the reviewer receives THAT PLAN verbatim and
+// critiques it against the actual resume + JD; the write round then receives
+// both. Provider-agnostic: any LlmCall can sit in either seat, so personas
+// and addressing always match the models actually talking (the legacy
+// per-provider plan functions hardcoded partner names and never passed the
+// plan to the reviewer at all).
+
+export const draftOptimizationPlan = async (
+  call: LlmCall,
+  resumeText: string,
+  jobDescription: string,
+  writerName: string,
+  reviewerName: string
+): Promise<string> => {
+  const system = `You are ${writerName}, the Primary Optimizer in a two-agent resume-tailoring workspace. Your reviewer partner ${reviewerName} will critique this plan, and a deterministic document engine will enforce all layout constraints later — your job here is STRATEGY ONLY.
+
+Write a concise, concrete optimization plan covering:
+1. HEADLINE — how the professional title line adopts the JD's exact role title.
+2. SUMMARY — which themes to rebuild around the JD's stack, metrics to keep, and the JD's industry to name.
+3. SKILLS TAXONOMY — which category labels to rename to the JD's vocabulary and what to re-curate inside them.
+4. EXPERIENCE & PROJECTS — which bullets to re-term, and toward which JD concepts (cite the bullet's current topic, not rewritten text).
+5. ATS COVERAGE — the highest-weight JD keywords the rewrite must guarantee.
+
+Rules: do NOT write any actual resume lines — strategy only. Never propose claims the resume cannot honestly support. No preamble or sign-off; start directly with the plan.`;
+
+  const out = await call(
+    system,
+    `RESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}`,
+    0.7,
+    8000
+  );
+  if (!out?.trim()) throw new Error("Writer returned an empty optimization plan.");
+  return out.trim();
+};
+
+export const critiqueOptimizationPlan = async (
+  call: LlmCall,
+  plan: string,
+  resumeText: string,
+  jobDescription: string,
+  reviewerName: string,
+  writerName: string
+): Promise<string> => {
+  const system = `You are ${reviewerName}, the Critical Reviewer in a two-agent resume-tailoring workspace. ${writerName} drafted the optimization plan you are given. Hold it against the ACTUAL resume and job description and return sharp, specific, actionable feedback:
+
+- JD requirements or high-weight ATS keywords the plan misses or underweights.
+- Anything the resume cannot honestly support — flag it as off-limits.
+- Weak or generic moves — name the sharper alternative, concretely.
+- Authenticity risks: copied JD phrasing, the same keyword phrased identically across roles, seniority inflation.
+- What the plan gets right (briefly), so the writer keeps it.
+
+Format: one-line verdict first ("Approve" or "Approve with changes"), then numbered points. Strategy only — do NOT write any actual resume lines. No preamble.`;
+
+  const out = await call(
+    system,
+    `PROPOSED PLAN (from ${writerName}):\n${plan}\n\nRESUME:\n${resumeText}\n\nJOB DESCRIPTION:\n${jobDescription}`,
+    0.5,
+    8000
+  );
+  if (!out?.trim()) throw new Error("Reviewer returned an empty critique.");
+  return out.trim();
+};
+
 // ─── Precision tailoring ─────────────────────────────────────────────────────
 
 export interface EngineFindings {
