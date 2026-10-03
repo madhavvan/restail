@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Folio — PDF editor</title>
+<meta name="description" content="Edit PDF text in the PDF's own fonts, fill forms, sign, and rearrange pages — entirely in your browser.">
+<link rel="icon" href="/restail/assets/icon-CUwqwgUG.svg" type="image/svg+xml">
+  <script type="module" crossorigin src="/restail/assets/editor-DEoxTcz8.js"></script>
+  <link rel="modulepreload" crossorigin href="/restail/assets/modulepreload-polyfill-B5Qt9EMX.js">
+  <link rel="stylesheet" crossorigin href="/restail/assets/editor-BuUEkG34.css">
+</head>
+<body>
+<div id="app" class="no-doc">
+  <header id="titlebar">
+    <div class="brand" title="Folio">
+      <img src="data:image/svg+xml,%3csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3e%3cdefs%3e%3clinearGradient%20id='g'%20x1='0'%20y1='0'%20x2='1'%20y2='1'%3e%3cstop%20offset='0'%20stop-color='%237b93ff'/%3e%3cstop%20offset='1'%20stop-color='%234a5cf0'/%3e%3c/linearGradient%3e%3clinearGradient%20id='p'%20x1='0'%20y1='0'%20x2='0'%20y2='1'%3e%3cstop%20offset='0'%20stop-color='%23ffffff'/%3e%3cstop%20offset='1'%20stop-color='%23e9ecff'/%3e%3c/linearGradient%3e%3c/defs%3e%3crect%20x='4'%20y='4'%20width='56'%20height='56'%20rx='14'%20fill='url(%23g)'/%3e%3cpath%20d='M20%2014h17l9%209v25a3%203%200%200%201-3%203H20a3%203%200%200%201-3-3V17a3%203%200%200%201%203-3z'%20fill='url(%23p)'/%3e%3cpath%20d='M37%2014v6a3%203%200%200%200%203%203h6z'%20fill='%23c9d1ff'/%3e%3cpath%20d='M23%2030h14M23%2036h18M23%2042h10'%20stroke='%235367f2'%20stroke-width='3'%20stroke-linecap='round'/%3e%3cpath%20d='M44.5%2033.5l5%205-10%2010-6%201%201-6z'%20fill='%231f2a6b'/%3e%3cpath%20d='M44.5%2033.5l5%205'%20stroke='%23ffd166'%20stroke-width='2.4'/%3e%3c/svg%3e" alt="" width="20" height="20">
+      <span>Folio</span>
+    </div>
+    <div id="tabs" role="tablist" aria-label="Open documents"></div>
+    <button id="tab-add" class="icon-btn ghost" title="Open a file (Ctrl+O)" aria-label="Open a file"></button>
+    <div class="spacer"></div>
+    <button id="theme-btn" class="icon-btn ghost" title="Theme" aria-label="Theme"></button>
+  </header>
+  <div id="toolbar" role="toolbar" aria-label="Tools"></div>
+  <main id="main">
+    <aside id="sidebar" aria-label="Pages">
+      <div class="side-head">
+        <span class="side-title">Pages</span>
+        <span id="page-count" class="muted"></span>
+        <div class="spacer"></div>
+        <button id="side-add" class="icon-btn small ghost" title="Insert pages from a file"></button>
+      </div>
+      <div id="thumbs" tabindex="0"></div>
+    </aside>
+    <section id="viewport" tabindex="-1">
+      <div id="pages"></div>
+      <div id="floatbar" hidden></div>
+    </section>
+    <div id="findbar" hidden></div>
+    <aside id="inspector" aria-label="Properties"></aside>
+    <section id="start" aria-label="Start"></section>
+  </main>
+  <footer id="status"></footer>
+</div>
+<div id="drop-hint" hidden><div><div class="drop-icon"></div><div>Drop to open</div></div></div>
+<div id="modal-root"></div>
+<div id="menu-root"></div>
+<div id="toasts" aria-live="polite"></div>
+<canvas id="sampler" width="8" height="8" hidden></canvas>
+</body>
+</html>
